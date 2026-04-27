@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CashNode - Payout Confirmation</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=Inter:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-bright": "#fcf9f8",
+                        "tertiary": "#8d4b00",
+                        "surface-container-low": "#f6f3f2",
+                        "primary": "#006948",
+                        "on-tertiary-fixed-variant": "#6e3900",
+                        "surface-container-highest": "#e5e2e1",
+                        "inverse-on-surface": "#f3f0ef",
+                        "surface-dim": "#dcd9d9",
+                        "on-tertiary": "#ffffff",
+                        "surface": "#fcf9f8",
+                        "secondary-fixed": "#89f5e7",
+                        "tertiary-fixed": "#ffdcc3",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-container": "#fffbff",
+                        "primary-fixed": "#85f8c4",
+                        "inverse-surface": "#313030",
+                        "tertiary-fixed-dim": "#ffb77d",
+                        "on-primary-fixed-variant": "#005137",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container": "#f0eded",
+                        "on-secondary-fixed": "#00201d",
+                        "on-error": "#ffffff",
+                        "on-tertiary-fixed": "#2f1500",
+                        "secondary-container": "#86f2e4",
+                        "surface-variant": "#e5e2e1",
+                        "outline-variant": "#bccac0",
+                        "on-secondary-fixed-variant": "#005049",
+                        "on-secondary": "#ffffff",
+                        "secondary": "#006a61",
+                        "surface-tint": "#006c4a",
+                        "surface-container-high": "#eae7e7",
+                        "on-background": "#1c1b1b",
+                        "primary-container": "#00855d",
+                        "on-surface": "#1c1b1b",
+                        "on-surface-variant": "#3d4a42",
+                        "tertiary-container": "#b15f00",
+                        "secondary-fixed-dim": "#6bd8cb",
+                        "on-primary-fixed": "#002114",
+                        "error": "#ba1a1a",
+                        "on-error-container": "#93000a",
+                        "outline": "#6d7a72",
+                        "inverse-primary": "#68dba9",
+                        "on-primary-container": "#f5fff7",
+                        "primary-fixed-dim": "#68dba9",
+                        "on-secondary-container": "#006f66",
+                        "background": "#fcf9f8",
+                        "error-container": "#ffdad6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "stack-md": "24px",
+                        "stack-xs": "8px",
+                        "margin-desktop": "48px",
+                        "gutter": "24px",
+                        "unit": "4px",
+                        "margin-mobile": "16px",
+                        "container-max": "1280px",
+                        "stack-lg": "48px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["Inter"],
+                        "caption": ["Inter"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "display-xl": ["Plus Jakarta Sans"],
+                        "body-md": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "headline-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "400"}],
+                        "caption": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700"}],
+                        "display-xl": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "label-sm": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600"}],
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .confirmation-code-character {
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .sand-gradient {
+            background: linear-gradient(180deg, #FAF9F6 0%, #FFFFFF 100%);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface-bright font-body-md text-on-surface min-h-screen flex flex-col">
+<!-- Top Navigation (Shell Implementation) -->
+<header class="bg-[#FAF9F6]/80 backdrop-blur-xl sticky top-0 z-50 items-center justify-between w-full px-8 py-4 max-w-[1280px] mx-auto hidden md:flex border-b border-stone-200">
+<div class="text-xl font-bold tracking-tight text-emerald-700">CashNode</div>
+<nav class="flex gap-8">
+<a class="text-stone-500 hover:text-stone-800 transition-colors" href="#">Dashboard</a>
+<a class="text-emerald-700 font-semibold border-b-2 border-emerald-600 pb-1" href="#">Earnings</a>
+<a class="text-stone-500 hover:text-stone-800 transition-colors" href="#">Liquidity</a>
+<a class="text-stone-500 hover:text-stone-800 transition-colors" href="#">Transfers</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="material-symbols-outlined text-stone-500 p-2 hover:bg-stone-100 rounded-lg">notifications</button>
+<button class="bg-primary px-6 py-2 text-white rounded-full font-label-sm hover:opacity-90 transition-all">Connect Wallet</button>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex-grow flex flex-col items-center px-margin-mobile md:px-margin-desktop py-stack-md max-w-[1280px] mx-auto w-full">
+<!-- Header Section -->
+<div class="w-full text-center mb-stack-md">
+<h1 class="font-headline-lg text-on-surface mb-2">Payout Ready</h1>
+<p class="font-body-md text-on-surface-variant">Show this code to Agent <span class="font-semibold text-primary">Marcus Thorne</span> at <span class="font-semibold text-primary">Central Square Hub</span></p>
+</div>
+<!-- Confirmation Code Card -->
+<div class="w-full max-w-md bg-surface-container-lowest rounded-[2rem] p-8 shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-surface-variant flex flex-col items-center mb-stack-md">
+<span class="font-label-sm text-on-surface-variant uppercase tracking-widest mb-6">Verification Code</span>
+<div class="flex gap-2 mb-8">
+<div class="w-12 h-16 bg-surface-container flex items-center justify-center rounded-xl border border-outline-variant">
+<span class="font-display-xl text-primary">8</span>
+</div>
+<div class="w-12 h-16 bg-surface-container flex items-center justify-center rounded-xl border border-outline-variant">
+<span class="font-display-xl text-primary">2</span>
+</div>
+<div class="w-12 h-16 bg-surface-container flex items-center justify-center rounded-xl border border-outline-variant">
+<span class="font-display-xl text-primary">4</span>
+</div>
+<div class="w-2 h-16 flex items-center justify-center">
+<div class="w-1 h-1 bg-outline-variant rounded-full"></div>
+</div>
+<div class="w-12 h-16 bg-surface-container flex items-center justify-center rounded-xl border border-outline-variant">
+<span class="font-display-xl text-primary">0</span>
+</div>
+<div class="w-12 h-16 bg-surface-container flex items-center justify-center rounded-xl border border-outline-variant">
+<span class="font-display-xl text-primary">9</span>
+</div>
+<div class="w-12 h-16 bg-surface-container flex items-center justify-center rounded-xl border border-outline-variant">
+<span class="font-display-xl text-primary">5</span>
+</div>
+</div>
+<div class="flex items-center gap-2 px-4 py-2 bg-secondary-container/30 rounded-full mb-2">
+<span class="material-symbols-outlined text-secondary text-[18px]" style="font-variation-settings: 'FILL' 1;">timer</span>
+<span class="font-label-sm text-on-secondary-container">Expires in 14:52</span>
+</div>
+</div>
+<!-- Location Bento Card -->
+<div class="w-full max-w-md grid grid-cols-1 gap-gutter">
+<div class="bg-surface-container-lowest rounded-[1.5rem] p-6 shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-surface-variant flex flex-col gap-4">
+<div class="flex items-start justify-between">
+<div>
+<h3 class="font-headline-md text-on-surface mb-1">Central Square Hub</h3>
+<p class="font-caption text-on-surface-variant">122 Banking District, North Wing</p>
+</div>
+<div class="bg-primary-fixed p-3 rounded-2xl">
+<span class="material-symbols-outlined text-on-primary-fixed-variant" style="font-variation-settings: 'FILL' 1;">store</span>
+</div>
+</div>
+<!-- Map Placeholder -->
+<div class="w-full h-32 rounded-xl overflow-hidden relative group">
+<img class="w-full h-full object-cover grayscale opacity-80" data-alt="Minimalist clean urban map of a city intersection with a single emerald green location pin marker" data-location="London" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAg6f_s1fInjHXRZeP32d7FCrP4Rr_TJiMV-9WoW51slYw-3956pvwR6qAeQ4hxEy6Xw3wLYex9oA9JB1PJF8X19pQU0KdyEmPzQ4-1RDIsrFvMZhZbXu27F9Ud10j_NeRitmDf9t9tB13HmamdXq-_is0mQiIadtfMN-w59ylsv0PHCbYk0D2KodtetrISV5OKmCptZL1ppt1jTLd9WbkuE9hrMjsKHmqbQl8DcQjg6DGPJQE8RkAg4nqsE3AYZ66Zcby8Lkt1ZeT3"/>
+<div class="absolute inset-0 bg-primary/10 pointer-events-none"></div>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+<div class="w-8 h-8 bg-primary rounded-full border-4 border-white shadow-lg flex items-center justify-center">
+<div class="w-2 h-2 bg-white rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="flex gap-4">
+<button class="flex-1 bg-surface-container-high py-3 rounded-xl font-label-sm text-on-surface hover:bg-surface-variant transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">directions</span>
+                        Get Directions
+                    </button>
+<button class="w-12 h-12 bg-surface-container-high rounded-xl flex items-center justify-center hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-[18px]">phone</span>
+</button>
+</div>
+</div>
+<!-- Transaction Details -->
+<div class="bg-surface-container-lowest rounded-[1.5rem] p-6 shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-surface-variant">
+<div class="flex justify-between items-center mb-4">
+<span class="font-label-sm text-on-surface-variant">Amount to Receive</span>
+<span class="font-headline-md text-primary">$2,450.00</span>
+</div>
+<div class="flex justify-between items-center text-on-surface-variant">
+<span class="font-caption">Transaction ID</span>
+<span class="font-caption font-mono">TXN-882-CN-95</span>
+</div>
+</div>
+</div>
+<div class="mt-stack-lg flex flex-col gap-4 w-full max-w-md mb-32">
+<button class="w-full bg-primary py-4 rounded-full font-label-sm text-white shadow-lg hover:opacity-90 active:scale-[0.98] transition-all">
+                I've Received the Cash
+            </button>
+<button class="w-full bg-transparent py-2 font-label-sm text-on-surface-variant hover:text-on-surface transition-colors">
+                Cancel &amp; Return Funds
+            </button>
+</div>
+</main>
+<!-- Footer (Shell Implementation) -->
+<footer class="w-full border-t border-stone-200 mt-24 bg-[#FAF9F6] hidden md:block">
+<div class="w-full max-w-[1280px] mx-auto px-8 py-12 flex flex-col md:flex-row justify-between items-center gap-6">
+<div class="text-lg font-bold text-stone-900">CashNode</div>
+<div class="flex gap-6">
+<a class="font-body-md text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Security</a>
+<a class="font-body-md text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Terms of Service</a>
+<a class="font-body-md text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Privacy Policy</a>
+<a class="font-body-md text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Contact Support</a>
+</div>
+<div class="text-sm text-stone-500">© 2024 CashNode Private Banking. All rights reserved.</div>
+</div>
+</footer>
+<!-- Bottom Navigation Bar (Shell Implementation) -->
+<nav class="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-2xl border-t border-stone-200 rounded-t-2xl shadow-[0_-4px_24px_rgba(0,0,0,0.04)] z-50 flex justify-around items-center px-6 pb-8 pt-4">
+<a class="flex flex-col items-center justify-center text-stone-400" href="#">
+<span class="material-symbols-outlined" data-icon="home_app_logo">home_app_logo</span>
+</a>
+<a class="flex flex-col items-center justify-center text-emerald-600 scale-110 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="account_balance_wallet" style="font-variation-settings: 'FILL' 1;">account_balance_wallet</span>
+</a>
+<a class="flex flex-col items-center justify-center text-stone-400" href="#">
+<span class="material-symbols-outlined" data-icon="receipt_long">receipt_long</span>
+</a>
+<a class="flex flex-col items-center justify-center text-stone-400" href="#">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+</a>
+</nav>
+</body></html>

@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CashNode | Programmable Cash-Out Nodes</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=Inter:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-bright": "#fcf9f8",
+                        "tertiary": "#8d4b00",
+                        "surface-container-low": "#f6f3f2",
+                        "primary": "#006948",
+                        "on-tertiary-fixed-variant": "#6e3900",
+                        "surface-container-highest": "#e5e2e1",
+                        "inverse-on-surface": "#f3f0ef",
+                        "surface-dim": "#dcd9d9",
+                        "on-tertiary": "#ffffff",
+                        "surface": "#fcf9f8",
+                        "secondary-fixed": "#89f5e7",
+                        "tertiary-fixed": "#ffdcc3",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-container": "#fffbff",
+                        "primary-fixed": "#85f8c4",
+                        "inverse-surface": "#313030",
+                        "tertiary-fixed-dim": "#ffb77d",
+                        "on-primary-fixed-variant": "#005137",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container": "#f0eded",
+                        "on-secondary-fixed": "#00201d",
+                        "on-error": "#ffffff",
+                        "on-tertiary-fixed": "#2f1500",
+                        "secondary-container": "#86f2e4",
+                        "surface-variant": "#e5e2e1",
+                        "outline-variant": "#bccac0",
+                        "on-secondary-fixed-variant": "#005049",
+                        "on-secondary": "#ffffff",
+                        "secondary": "#006a61",
+                        "surface-tint": "#006c4a",
+                        "surface-container-high": "#eae7e7",
+                        "on-background": "#1c1b1b",
+                        "primary-container": "#00855d",
+                        "on-surface": "#1c1b1b",
+                        "on-surface-variant": "#3d4a42",
+                        "tertiary-container": "#b15f00",
+                        "secondary-fixed-dim": "#6bd8cb",
+                        "on-primary-fixed": "#002114",
+                        "error": "#ba1a1a",
+                        "on-error-container": "#93000a",
+                        "outline": "#6d7a72",
+                        "inverse-primary": "#68dba9",
+                        "on-primary-container": "#f5fff7",
+                        "primary-fixed-dim": "#68dba9",
+                        "on-secondary-container": "#006f66",
+                        "background": "#fcf9f8",
+                        "error-container": "#ffdad6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "stack-md": "24px",
+                        "stack-xs": "8px",
+                        "margin-desktop": "48px",
+                        "gutter": "24px",
+                        "unit": "4px",
+                        "margin-mobile": "16px",
+                        "container-max": "1280px",
+                        "stack-lg": "48px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["Inter"],
+                        "caption": ["Inter"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "display-xl": ["Plus Jakarta Sans"],
+                        "body-md": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "headline-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "400"}],
+                        "caption": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700"}],
+                        "display-xl": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "label-sm": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600"}],
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            background-color: #FAF9F6;
+        }
+    </style>
+</head>
+<body class="font-body-md text-on-surface selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- TopAppBar -->
+<header class="bg-[#FAF9F6]/80 backdrop-blur-xl hidden md:flex sticky top-0 z-50 items-center justify-between w-full px-8 py-4 max-w-[1280px] mx-auto border-b border-stone-200">
+<div class="text-xl font-bold tracking-tight text-emerald-700">CashNode</div>
+<nav class="flex items-center gap-8">
+<a class="text-emerald-700 font-semibold border-b-2 border-emerald-600 pb-1 font-headline-md text-[16px]" href="#">Dashboard</a>
+<a class="text-stone-500 hover:text-stone-800 transition-colors font-headline-md text-[16px]" href="#">Earnings</a>
+<a class="text-stone-500 hover:text-stone-800 transition-colors font-headline-md text-[16px]" href="#">Liquidity</a>
+<a class="text-stone-500 hover:text-stone-800 transition-colors font-headline-md text-[16px]" href="#">Transfers</a>
+</nav>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-stone-500 hover:bg-stone-100 p-2 rounded-lg cursor-pointer">notifications</span>
+<span class="material-symbols-outlined text-stone-500 hover:bg-stone-100 p-2 rounded-lg cursor-pointer">settings</span>
+</div>
+<button class="bg-primary hover:opacity-90 text-white px-6 py-2.5 rounded-full font-label-sm transition-all duration-200 shadow-sm">
+                Connect Wallet
+            </button>
+</div>
+</header>
+<main class="max-w-[1280px] mx-auto px-6 md:px-8">
+<!-- Hero Section -->
+<section class="py-20 md:py-32 flex flex-col md:flex-row items-center gap-16">
+<div class="flex-1 space-y-8">
+<div class="inline-flex items-center px-3 py-1 bg-secondary-container text-on-secondary-container rounded-full font-label-sm">
+                    Network Status: Live in 42 Markets
+                </div>
+<h1 class="font-display-xl text-on-surface leading-[1.1] md:text-[64px]">
+                    Turning neighborhood agents into <span class="text-primary italic">programmable</span> cash-out nodes.
+                </h1>
+<p class="font-body-lg text-on-surface-variant max-w-xl">
+                    CashNode bridges digital liquidity and physical cash. We transform existing local businesses into secure, automated points for instant global remittance.
+                </p>
+<div class="flex flex-col sm:flex-row gap-4 pt-4">
+<button class="bg-gradient-to-r from-emerald-600 to-teal-700 text-white px-8 py-4 rounded-xl font-label-sm shadow-lg hover:shadow-xl transition-all">
+                        Launch Dashboard
+                    </button>
+<button class="bg-surface-container-lowest border border-outline-variant text-on-surface px-8 py-4 rounded-xl font-label-sm hover:bg-surface-container-low transition-all">
+                        Become an Agent
+                    </button>
+</div>
+<div class="flex items-center gap-4 pt-8">
+<div class="flex -space-x-2">
+<img class="w-10 h-10 rounded-full border-2 border-surface shadow-sm" data-alt="portrait of a confident woman entrepreneur in a modern office setting" src=""/>
+<img class="w-10 h-10 rounded-full border-2 border-surface shadow-sm" data-alt="portrait of a smiling shop owner in front of his local convenience store" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDHESlbDyJEZOE6TuP7JiAEJao19tRmQFrnaPWYL7yEYO6kRznyeXqHmjOj1nslsRuWJjrsU2eCKoeC8c0QL8v7sQvYT2M1jzQqy4oZYmefXdzBQVczxr1tAX6nTvd8LfvvQYRYyT92FXoNAXHC6vkZTRGuLrOEv4yz2GH-FAsee0Wg10rUCmzwWgfMAAOd0AbaDEt3VbhEB2bbUv4GRVbDyrQt8SDc93cEaIYm-KXb5yB8HwPKpZQOhxfWIXivX4F6b8fRKmmYVnt7"/>
+<img class="w-10 h-10 rounded-full border-2 border-surface shadow-sm" data-alt="portrait of a professional man in a tech environment with warm lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDo-Mm8NUu51Zku_pDLZXEz9X_sNtN2KurKxIVwtGrTz2vDuUy_q4_8j7qwKs12bAjeNCbHNApSw2T3fnUvbLdHbC4ey8ASSU8RNEpjpoJAmzf95gzalGMJEJP1jWULCdKSsyrvFWV8XomcYuqbpyA_SKb7ucI4pj5Kt7cTDQxE7bc7KcBxKY6kcBjr_sPCQ_H3Y5bi4UuMDZXpHDqXf_W1_b13q1v5aPIjuP6QVdko4gKbwnM5qo9ECNXB6ndXYpIJeosbitQ9NJNN"/>
+</div>
+<span class="font-caption text-on-surface-variant">Trusted by 12,000+ local nodes worldwide</span>
+</div>
+</div>
+<div class="flex-1 w-full relative">
+<div class="bg-white p-8 rounded-[2rem] shadow-2xl border border-stone-100 relative z-10 overflow-hidden">
+<div class="absolute inset-0 opacity-10" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuCzcGFDSTW1Nr03bNX0665ZYEqxRYF6_lfAp-RRkLxlBXLMR2i68hn8J2PPUG1yTEBLpMUh06e22nbI0qAnMNR8yYFdQQ6edJhWCgyUVYSFGTvBCLhWVLePzqxnplC3_LXJPVm5eIURKF8sS1sqb1u4TbQB2KUcimSg5NHZMfKIhs4tWC-cicq9PM2nArLGed_Qif2oBlc1MUGdySogjQZFaZWzgEAC608pruxqSXi7_3pg46lB69_FK_hEYZoM2rIITEKAvskGUwJd');"></div>
+<img class="w-full h-auto rounded-xl relative z-20" data-alt="abstract digital visualization of a global financial network map with glowing green connection nodes" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB7YF-RZFq0TY6eCRKZ5DFlx3WliFS-cS-tg00snMVgZ4k4zg9giLVaztcYlFeYPXKrLpEHj-YXqOgCxxzdQdWaayQoPMDPfoS42knl35kUvoMMrbBTsWVyrrz8YMiCXcdmTK8ceOfXvxLC82eRK9tbgPHXT233QxUxmKS8zoQXx0_N0Sh54rGWDqHnBMULTlel8QPb96TTAzyzm0l6KDiAxTUZTv63b4sRDKB6xC9BTAfV_O9uTszsMDucxkgv05tybT2LBKUeH5E2"/>
+<div class="absolute bottom-12 right-12 bg-white/90 backdrop-blur-md p-4 rounded-2xl shadow-lg border border-primary/10 z-30">
+<div class="flex items-center gap-3">
+<div class="w-3 h-3 bg-primary rounded-full animate-pulse"></div>
+<span class="font-label-sm">Active Node: Lagos Terminal 04</span>
+</div>
+</div>
+</div>
+<!-- Decorative elements -->
+<div class="absolute -top-12 -right-12 w-64 h-64 bg-primary-fixed-dim/20 rounded-full blur-3xl -z-10"></div>
+<div class="absolute -bottom-12 -left-12 w-64 h-64 bg-secondary-fixed/20 rounded-full blur-3xl -z-10"></div>
+</div>
+</section>
+<!-- Bento How It Works -->
+<section class="py-24">
+<div class="text-center mb-16 space-y-4">
+<h2 class="font-headline-lg text-on-surface">The Flow of Liquidity</h2>
+<p class="font-body-md text-on-surface-variant max-w-2xl mx-auto">Moving value across borders shouldn't take days. With CashNode, it's a three-step journey from digital asset to physical currency.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-gutter">
+<!-- Step 1 -->
+<div class="md:col-span-4 bg-white p-10 rounded-[2rem] shadow-sm border border-stone-100 flex flex-col justify-between group hover:shadow-md transition-all">
+<div class="space-y-6">
+<div class="w-14 h-14 bg-primary-container/10 flex items-center justify-center rounded-2xl text-primary">
+<span class="material-symbols-outlined text-[32px]">send_money</span>
+</div>
+<h3 class="font-headline-md text-on-surface">1. Sender Creates</h3>
+<p class="font-body-md text-on-surface-variant">The sender initiates a transfer via the CashNode app, locking liquidity into a smart escrow node.</p>
+</div>
+<div class="pt-8 mt-auto">
+<span class="font-label-sm text-primary flex items-center gap-2 group-hover:translate-x-1 transition-transform">
+                            Start a transfer <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</span>
+</div>
+</div>
+<!-- Step 2 -->
+<div class="md:col-span-4 bg-white p-10 rounded-[2rem] shadow-sm border border-stone-100 flex flex-col justify-between group hover:shadow-md transition-all">
+<div class="space-y-6">
+<div class="w-14 h-14 bg-secondary-container/20 flex items-center justify-center rounded-2xl text-secondary">
+<span class="material-symbols-outlined text-[32px]">verified_user</span>
+</div>
+<h3 class="font-headline-md text-on-surface">2. Agent Accepts</h3>
+<p class="font-body-md text-on-surface-variant">A local agent near the receiver accepts the task and verifies their available cash liquidity.</p>
+</div>
+<div class="pt-8 mt-auto">
+<span class="font-label-sm text-secondary flex items-center gap-2 group-hover:translate-x-1 transition-transform">
+                            View agent network <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</span>
+</div>
+</div>
+<!-- Step 3 -->
+<div class="md:col-span-4 bg-white p-10 rounded-[2rem] shadow-sm border border-stone-100 flex flex-col justify-between group hover:shadow-md transition-all">
+<div class="space-y-6">
+<div class="w-14 h-14 bg-tertiary-container/10 flex items-center justify-center rounded-2xl text-tertiary">
+<span class="material-symbols-outlined text-[32px]">payments</span>
+</div>
+<h3 class="font-headline-md text-on-surface">3. Receiver Collects</h3>
+<p class="font-body-md text-on-surface-variant">The receiver visits the agent, provides a secure OTP, and collects physical cash instantly.</p>
+</div>
+<div class="pt-8 mt-auto">
+<span class="font-label-sm text-tertiary flex items-center gap-2 group-hover:translate-x-1 transition-transform">
+                            Find locations <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Value Props Grid -->
+<section class="py-24 bg-surface-container rounded-[3rem] px-8 md:px-20 overflow-hidden relative">
+<div class="absolute top-0 right-0 w-1/2 h-full -z-0 opacity-20 pointer-events-none">
+<img class="w-full h-full object-cover" data-alt="top-down view of a modern clean workspace with white desk and tech gadgets in minimal aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDbXCZsAxOBFWFmc-0wU5Jo5RnIEsV3KQajEGYf2PWXewAjleg5Z82mkRo8z2zDBo72y_75b44xlfaw5xrW9NLvNXeVluK_Sd-WjIKgCubWF7Rrd_7kmTPGPrlJ81njrFrAsO2BlFKvr4ocMghNdhJV3WDmbAIaUjuCrI-Ww-T5Uw1iLCqYMqsv9XYNjMNIUMd4nWdl5nrqiDjLAtyIy8fUFtbvtFupUFaq8Eq-L1vBot3aS2VWUVlE5OBXr2cKhQAA-dEw4Qqx6iW0"/>
+</div>
+<div class="relative z-10 grid grid-cols-1 lg:grid-cols-2 gap-20 items-center">
+<div class="space-y-12">
+<h2 class="font-display-xl text-on-surface">Built for trust, optimized for speed.</h2>
+<div class="space-y-8">
+<div class="flex gap-6">
+<div class="flex-shrink-0 w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">security</span>
+</div>
+<div>
+<h4 class="font-headline-md text-[20px] mb-2">Immutable Security</h4>
+<p class="font-body-md text-on-surface-variant">Every transaction is recorded on-chain, ensuring cryptographic proof of settlement for both parties.</p>
+</div>
+</div>
+<div class="flex gap-6">
+<div class="flex-shrink-0 w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">bolt</span>
+</div>
+<div>
+<h4 class="font-headline-md text-[20px] mb-2">Instant Settlement</h4>
+<p class="font-body-md text-on-surface-variant">Global transfers that settle as fast as you can walk to your nearest CashNode agent.</p>
+</div>
+</div>
+<div class="flex gap-6">
+<div class="flex-shrink-0 w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">savings</span>
+</div>
+<div>
+<h4 class="font-headline-md text-[20px] mb-2">Ultralow Fees</h4>
+<p class="font-body-md text-on-surface-variant">By cutting out correspondent banking layers, we pass 80% of traditional costs back to you.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="bg-white/80 backdrop-blur-xl p-8 rounded-[2rem] shadow-xl border border-white/50 space-y-8">
+<div class="flex justify-between items-center pb-6 border-b border-stone-100">
+<h3 class="font-headline-md">Live Node Stats</h3>
+<div class="px-3 py-1 bg-primary/10 text-primary rounded-lg font-label-sm">Real-time</div>
+</div>
+<div class="grid grid-cols-2 gap-8">
+<div>
+<p class="font-caption text-on-surface-variant uppercase tracking-wider">Total Liquidity</p>
+<p class="font-display-xl text-[32px] text-on-surface">$14.2M</p>
+</div>
+<div>
+<p class="font-caption text-on-surface-variant uppercase tracking-wider">Active Nodes</p>
+<p class="font-display-xl text-[32px] text-on-surface">12,482</p>
+</div>
+<div>
+<p class="font-caption text-on-surface-variant uppercase tracking-wider">Avg. Time</p>
+<p class="font-display-xl text-[32px] text-on-surface">14m</p>
+</div>
+<div>
+<p class="font-caption text-on-surface-variant uppercase tracking-wider">Reliability</p>
+<p class="font-display-xl text-[32px] text-on-surface">99.9%</p>
+</div>
+</div>
+<div class="pt-6">
+<div class="bg-surface-container-low p-4 rounded-xl space-y-3">
+<div class="flex justify-between items-center">
+<span class="font-label-sm">Lagos Terminal 04</span>
+<span class="text-primary font-bold">+$1,200</span>
+</div>
+<div class="w-full bg-stone-200 h-1.5 rounded-full overflow-hidden">
+<div class="bg-primary h-full w-[75%] rounded-full"></div>
+</div>
+<p class="font-caption text-on-surface-variant">Node Capacity: 75% utilized</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Agent Map Section -->
+<section class="py-32">
+<div class="flex flex-col lg:flex-row gap-20 items-center">
+<div class="lg:w-1/2 relative">
+<div class="rounded-[2.5rem] overflow-hidden shadow-2xl border-8 border-white">
+<div class="h-[500px] w-full bg-stone-200 relative">
+<img class="w-full h-full object-cover" data-alt="a stylized map with focus on urban streets showing green glowing circular pins representing cash out nodes" data-location="London" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCp44vIOWNYLC2PaE49qSFzISKmthbnyMFuVsyXk1hEvB5Uf_DoP5PobxoCyk0jCRo78PdxwB6vtYMyXqTLP-PINhUjuY2SPqUfOvsq2cm5f6pVPFDNwESjadZFoyVSZoMvMgyYa8AAEm8xSvRdpZFpZtL2tf0HIKtxpH9-P-KxxuwhSu4Go7xdS0WlxPTzxUp_4Usq3K2LgIEvnKrASixze8Hp_88bkCBVb8uQGnF5OZY72diMSqGhLd5USBV1pP-9LEYZzUpfbVHc"/>
+<div class="absolute inset-0 bg-primary/5"></div>
+</div>
+</div>
+<!-- Overlay floating info -->
+<div class="absolute top-12 left-12 bg-white p-4 rounded-2xl shadow-lg border border-stone-100 flex items-center gap-4">
+<div class="w-12 h-12 bg-primary rounded-full flex items-center justify-center">
+<img class="w-full h-full object-cover rounded-full" data-alt="headshot of a helpful female support agent" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD2HG_Uvi7qiWOvXJX6xYVxGJJw5SsUPQJZ8MTdtbTdmbHO2Va4_SMEdLbL35fxbW60fqeDRDYP8JKEfU21tKCuzObcI7WRrDllJ7gj7sbDR2aoNr72pKd8ZUEwTlCzWHHgXqanQ3s-LvVpjVEZUq0fjOH-sRJKV8uudClqvNFHBjtE0-Xp46cpQ9bwkN78cu14YNhDYeokckkYNCPAjxnVPfP1A2fNXfLbEAlM-1L09y20UfBB5jDht1UJtyl5lA223W_feT7UyXFa"/>
+</div>
+<div>
+<p class="font-label-sm">Sarah's Grocery</p>
+<p class="font-caption text-primary">● Online • 200m away</p>
+</div>
+</div>
+</div>
+<div class="lg:w-1/2 space-y-8">
+<h2 class="font-headline-lg text-on-surface">Universal Liquidity Map</h2>
+<p class="font-body-lg text-on-surface-variant">
+                        CashNode isn't just an app; it's a physical infrastructure layer for the new internet of value. Our network turns existing trusted merchants into mini-banks, making cash access as ubiquitous as a corner store.
+                    </p>
+<ul class="space-y-4">
+<li class="flex items-center gap-3 font-body-md">
+<span class="material-symbols-outlined text-primary">check_circle</span>
+                            Geofenced security perimeters for agents
+                        </li>
+<li class="flex items-center gap-3 font-body-md">
+<span class="material-symbols-outlined text-primary">check_circle</span>
+                            Dynamic liquidity rebalancing
+                        </li>
+<li class="flex items-center gap-3 font-body-md">
+<span class="material-symbols-outlined text-primary">check_circle</span>
+                            Automated KYB verification for nodes
+                        </li>
+</ul>
+<button class="bg-surface-container-lowest border-2 border-primary text-primary px-8 py-4 rounded-xl font-label-sm hover:bg-primary hover:text-white transition-all">
+                        Explore Local Nodes
+                    </button>
+</div>
+</div>
+</section>
+<!-- Final CTA -->
+<section class="py-24 text-center bg-primary rounded-[3rem] text-on-primary relative overflow-hidden">
+<div class="absolute inset-0 opacity-10 pointer-events-none">
+<div class="w-full h-full" style="background-image: radial-gradient(circle at 2px 2px, white 1px, transparent 0); background-size: 40px 40px;"></div>
+</div>
+<div class="relative z-10 max-w-3xl mx-auto space-y-10">
+<h2 class="font-display-xl md:text-[56px] text-white">Ready to join the node network?</h2>
+<p class="font-body-lg opacity-90 text-white">Whether you're sending value home or looking to monetize your business's idle cash, CashNode is your bridge to the global economy.</p>
+<div class="flex flex-col sm:flex-row gap-6 justify-center">
+<button class="bg-white text-primary px-10 py-5 rounded-2xl font-label-sm shadow-xl hover:scale-105 transition-transform">
+                        Get Started as Sender
+                    </button>
+<button class="bg-primary-container text-white px-10 py-5 rounded-2xl font-label-sm border border-white/20 hover:bg-primary-container/80 transition-all">
+                        Register as Agent
+                    </button>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="w-full border-t mt-24 bg-[#FAF9F6] border-stone-200">
+<div class="w-full max-w-[1280px] mx-auto px-8 py-12 flex flex-col md:flex-row justify-between items-center gap-6">
+<div class="space-y-4 text-center md:text-left">
+<div class="text-lg font-bold text-stone-900">CashNode</div>
+<p class="font-['Plus_Jakarta_Sans'] text-sm text-stone-500 max-w-xs">
+                    Building the physical liquidity layer for a digital world. Secure, fast, and local.
+                </p>
+</div>
+<div class="flex flex-wrap justify-center gap-8">
+<a class="font-['Plus_Jakarta_Sans'] text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Security</a>
+<a class="font-['Plus_Jakarta_Sans'] text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Terms of Service</a>
+<a class="font-['Plus_Jakarta_Sans'] text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Privacy Policy</a>
+<a class="font-['Plus_Jakarta_Sans'] text-sm text-stone-500 hover:text-emerald-600 transition-colors" href="#">Contact Support</a>
+</div>
+<div class="text-stone-500 font-['Plus_Jakarta_Sans'] text-sm">
+                © 2024 CashNode Private Banking. All rights reserved.
+            </div>
+</div>
+</footer>
+<!-- BottomNavBar (Mobile) -->
+<nav class="md:hidden fixed bottom-0 left-0 right-0 flex justify-around items-center px-6 pb-8 pt-4 bg-white/90 backdrop-blur-2xl border-t border-stone-200 rounded-t-2xl shadow-[0_-4px_24px_rgba(0,0,0,0.04)] z-50">
+<div class="flex flex-col items-center justify-center text-emerald-600 scale-110 transition-transform">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home_app_logo</span>
+</div>
+<div class="flex flex-col items-center justify-center text-stone-400">
+<span class="material-symbols-outlined">account_balance_wallet</span>
+</div>
+<div class="flex flex-col items-center justify-center text-stone-400">
+<span class="material-symbols-outlined">receipt_long</span>
+</div>
+<div class="flex flex-col items-center justify-center text-stone-400">
+<span class="material-symbols-outlined">person</span>
+</div>
+</nav>
+</body></html>
