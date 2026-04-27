@@ -1,12 +1,18 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireUserRole } from "@/lib/auth-session";
-import { acceptPayoutRequest, completePayoutRequest, listAssignedAgentPayoutRequests, listAvailablePayoutRequests, type PayoutRequestRecord } from "@/lib/payout-requests";
-import { getWelcomeGreeting } from "@/lib/user-greeting";
 import { AgentLivePresencePanel } from "@/components/agent-live-presence-panel";
 import { AppShell } from "@/components/app-shell";
 import { Icon } from "@/components/ui/icon";
+import { requireUserRole } from "@/lib/auth-session";
+import {
+  acceptPayoutRequest,
+  completePayoutRequest,
+  listAssignedAgentPayoutRequests,
+  listAvailablePayoutRequests,
+  type PayoutRequestRecord
+} from "@/lib/payout-requests";
+import { getWelcomeGreeting } from "@/lib/user-greeting";
 
 function formatUsd(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -90,7 +96,12 @@ export default async function AgentDashboardPage() {
         <p className="text-body-lg text-on-surface-variant">Manage liquidity, receive nearby payout matches, and close completed handoffs.</p>
       </header>
 
-      <AgentLivePresencePanel fallbackHub={user.agentProfile?.serviceZone ?? "Saved agent hub"} />
+      <AgentLivePresencePanel
+        fallbackHub={user.agentProfile?.serviceZone ?? "Saved agent hub"}
+        fallbackAddress={user.agentProfile?.serviceAddress ?? "Save an agent hub during onboarding to anchor live dispatch."}
+        fallbackLatitude={user.agentProfile?.serviceLatitude ?? null}
+        fallbackLongitude={user.agentProfile?.serviceLongitude ?? null}
+      />
 
       <div className="grid gap-gutter md:grid-cols-12">
         <div className="space-y-8 md:col-span-8">
@@ -148,9 +159,7 @@ export default async function AgentDashboardPage() {
                       </div>
                       <div>
                         <div className="text-xl font-semibold text-on-surface">{request.pickupArea}</div>
-                        <div className="text-sm text-on-surface-variant">
-                          {request.reference} · {request.receiverName} · {formatDate(request.createdAt)}
-                        </div>
+                        <div className="text-sm text-on-surface-variant">{`${request.reference} · ${request.receiverName} · ${formatDate(request.createdAt)}`}</div>
                       </div>
                     </div>
 
@@ -223,6 +232,7 @@ export default async function AgentDashboardPage() {
               ) : (
                 activeAssignments.map((request) => {
                   const meta = statusMeta(request.status);
+
                   return (
                     <div key={request.id} className="rounded-r-xl border-l-4 border-primary bg-surface-container-lowest p-4">
                       <div className="mb-2 flex items-start justify-between">

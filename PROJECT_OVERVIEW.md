@@ -119,6 +119,13 @@ For every payout request:
 - if a matching agent is found, the request is routed to that agent immediately
 - if no eligible agent is available, the request can remain open until network capacity catches up
 
+To make "nearest" reliable in practice:
+
+- agents must go live from their dashboard
+- the app uses the device's current GPS location as the dispatch source
+- background heartbeats keep that location fresh across normal navigation, quick app switches, reconnects, and page visibility changes
+- if the heartbeat goes stale, the agent drops out of automatic matching until live presence resumes
+
 This makes the sender experience feel closer to ride-hailing dispatch than manual peer discovery. The sender is not choosing an agent directly; CashNode is choosing the best nearby cash-out node for the receiver.
 
 ## 6. Who CashNode Serves

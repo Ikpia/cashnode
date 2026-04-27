@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AgentPresenceRuntimeProvider } from "@/components/agent-presence-runtime";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { WalletProvider } from "@/components/wallet-provider";
 import "./globals.css";
@@ -34,7 +35,9 @@ export default function RootLayout({
         />
       </head>
       <body className={`${inter.variable} ${plusJakarta.variable} bg-background font-sans text-on-surface`}>
-        <WalletProvider>{children}</WalletProvider>
+        <WalletProvider>
+          <AgentPresenceRuntimeProvider>{children}</AgentPresenceRuntimeProvider>
+        </WalletProvider>
       </body>
     </html>
   );

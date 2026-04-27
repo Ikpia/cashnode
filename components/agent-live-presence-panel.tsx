@@ -1,17 +1,16 @@
 "use client";
 
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import type { AppAgentPresence } from "@/lib/agent-presence";
+import { useMemo } from "react";
+import { useAgentPresenceRuntime } from "@/components/agent-presence-runtime";
+import { PickupMapEmbed } from "@/components/pickup-map-embed";
+import { Icon } from "@/components/ui/icon";
+import { buildPickupMapEmbedUrl, calculateDistanceKm, formatDistanceLabel } from "@/lib/pickup-locations";
 
 type AgentLivePresencePanelProps = {
   fallbackHub: string;
-};
-
-type CoordinatesSnapshot = {
-  latitude: number;
-  longitude: number;
-  accuracyMeters?: number;
+  fallbackAddress: string;
+  fallbackLatitude: number | null;
+  fallbackLongitude: number | null;
 };
 
 function formatCoordinates(latitude: number | null, longitude: number | null) {
@@ -34,18 +33,17 @@ function formatLastSeen(value: string | null) {
   }).format(new Date(value));
 }
 
-export function AgentLivePresencePanel({ fallbackHub }: AgentLivePresencePanelProps) {
-  const router = useRouter();
-  const [presence, setPresence] = useState<AppAgentPresence | null>(null);
-  const [message, setMessage] = useState("Go live to let CashNode match nearby receiver pickups using your current device location.");
-  const [isLoading, setIsLoading] = useState(true);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const watchIdRef = useRef<number | null>(null);
-  const lastKnownCoordinatesRef = useRef<CoordinatesSnapshot | null>(null);
-  const lastSentAtRef = useRef(0);
-  const lastRefreshAtRef = useRef(0);
+function buildCoordinateSearchUrl(latitude: number, longitude: number) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${latitude},${longitude}`)}`;
+}
 
-  const isLive = Boolean(presence?.isOnline && !presence.stale);
+export function AgentLivePresencePanel({
+  fallbackHub,
+  fallbackAddress,
+  fallbackLatitude,
+  fallbackLongitude
+}: AgentLivePresencePanelProps) {
+  const { isLoading, isUpdating, isLive, presence, message, goLive, goOffline } = useAgentPresenceRuntime();
 
   const statusMeta = useMemo(() => {
     if (isUpdating) {
@@ -68,237 +66,47 @@ export function AgentLivePresencePanel({ fallbackHub }: AgentLivePresencePanelPr
     };
   }, [isLive, isUpdating]);
 
-  const stopWatching = () => {
-    if (watchIdRef.current !== null && typeof navigator !== "undefined" && "geolocation" in navigator) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-    }
-
-    watchIdRef.current = null;
-  };
-
-  const maybeRefreshDashboard = (force = false) => {
-    const now = Date.now();
-
-    if (!force && now - lastRefreshAtRef.current < 60000) {
-      return;
-    }
-
-    lastRefreshAtRef.current = now;
-    startTransition(() => {
-      router.refresh();
-    });
-  };
-
-  const pushPresence = async (coordinates: CoordinatesSnapshot, forceRefresh = false) => {
-    lastKnownCoordinatesRef.current = coordinates;
-    lastSentAtRef.current = Date.now();
-
-    const response = await fetch("/api/agent-presence", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(coordinates)
-    });
-    const payload = (await response.json()) as {
-      error?: string;
-      presence?: AppAgentPresence | null;
-    };
-
-    if (!response.ok) {
-      throw new Error(payload.error ?? "Unable to update live agent presence.");
-    }
-
-    if (payload.presence) {
-      setPresence(payload.presence);
-    }
-
-    setMessage("Live dispatch is active. CashNode is now matching nearby receiver pickups using your current device location.");
-    maybeRefreshDashboard(forceRefresh);
-  };
-
-  const startLiveDispatch = async (resume = false) => {
-    if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
-      setMessage("This browser does not support device geolocation, so live dispatch cannot start here.");
-      return;
-    }
-
-    setIsUpdating(true);
-
-    const handlePosition = async (position: GeolocationPosition, forceRefresh = false) => {
-      const coordinates = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracyMeters: position.coords.accuracy
-      };
-
-      await pushPresence(coordinates, forceRefresh);
-    };
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            void handlePosition(position, true).then(resolve).catch(reject);
-          },
-          (error) => {
-            reject(error);
-          },
-          {
-            enableHighAccuracy: true,
-            timeout: 12000,
-            maximumAge: 0
-          }
-        );
-      });
-
-      if (watchIdRef.current === null) {
-        watchIdRef.current = navigator.geolocation.watchPosition(
-          (position) => {
-            const now = Date.now();
-
-            if (now - lastSentAtRef.current < 15000) {
-              return;
-            }
-
-            void handlePosition(position).catch((error) => {
-              setMessage(error instanceof Error ? error.message : "Unable to refresh live agent presence.");
-            });
-          },
-          (error) => {
-            setMessage(
-              error.code === error.PERMISSION_DENIED
-                ? "Location access was denied. Allow location access to receive nearby payout matches."
-                : error.message || "Unable to watch the device location right now."
-            );
-          },
-          {
-            enableHighAccuracy: true,
-            timeout: 15000,
-            maximumAge: 15000
-          }
-        );
-      }
-
-      if (!resume) {
-        setMessage("Live dispatch is active. CashNode will keep using your current device location while you stay online.");
-      }
-    } catch (error) {
-      const geolocationErrorCode =
-        typeof error === "object" && error && "code" in error && typeof error.code === "number" ? error.code : null;
-      const geolocationErrorMessage =
-        typeof error === "object" && error && "message" in error && typeof error.message === "string" ? error.message : "";
-
-      setMessage(
-        geolocationErrorCode === 1
-          ? "Location access was denied. Allow location access to receive nearby payout matches."
-          : geolocationErrorMessage || "Unable to start live dispatch right now."
-      );
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  const stopLiveDispatch = async () => {
-    stopWatching();
-    setIsUpdating(true);
-
-    try {
-      const response = await fetch("/api/agent-presence", {
-        method: "DELETE"
-      });
-      const payload = (await response.json()) as {
-        error?: string;
-        presence?: AppAgentPresence | null;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Unable to stop live dispatch.");
-      }
-
-      setPresence(payload.presence ?? null);
-      setMessage("You are offline. New payouts will no longer be matched to your live location until you go live again.");
-      maybeRefreshDashboard(true);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to stop live dispatch.");
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  useEffect(() => {
-    const loadPresence = async () => {
-      try {
-        const response = await fetch("/api/agent-presence", {
-          method: "GET",
-          cache: "no-store"
-        });
-        const payload = (await response.json()) as {
-          error?: string;
-          presence?: AppAgentPresence | null;
-        };
-
-        if (!response.ok) {
-          throw new Error(payload.error ?? "Unable to load the live agent presence state.");
+  const liveCoordinates =
+    typeof presence?.latitude === "number" && typeof presence?.longitude === "number"
+      ? {
+          latitude: presence.latitude,
+          longitude: presence.longitude
         }
-
-        setPresence(payload.presence ?? null);
-
-        if (payload.presence?.isOnline) {
-          void startLiveDispatch(true);
+      : null;
+  const fallbackCoordinates =
+    typeof fallbackLatitude === "number" && typeof fallbackLongitude === "number"
+      ? {
+          latitude: fallbackLatitude,
+          longitude: fallbackLongitude
         }
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : "Unable to load the live agent presence state.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void loadPresence();
-
-    return () => {
-      stopWatching();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isLive || !lastKnownCoordinatesRef.current) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      const coordinates = lastKnownCoordinatesRef.current;
-
-      if (!coordinates) {
-        return;
-      }
-
-      void pushPresence(coordinates).catch((error) => {
-        setMessage(error instanceof Error ? error.message : "Unable to keep the live agent presence active.");
-      });
-    }, 45000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [isLive]);
+      : null;
+  const mapCoordinates = liveCoordinates ?? fallbackCoordinates;
+  const mapEmbedUrl = mapCoordinates ? buildPickupMapEmbedUrl(mapCoordinates) : null;
+  const locationSource = liveCoordinates ? "Current device location" : "Saved hub fallback";
+  const hubDriftLabel =
+    liveCoordinates && fallbackCoordinates
+      ? formatDistanceLabel(calculateDistanceKm(liveCoordinates, fallbackCoordinates))
+      : null;
+  const accuracyLabel =
+    typeof presence?.accuracyMeters === "number" ? `${Math.round(presence.accuracyMeters)} m` : "Waiting for GPS";
+  const openMapHref = mapCoordinates ? buildCoordinateSearchUrl(mapCoordinates.latitude, mapCoordinates.longitude) : "#";
 
   return (
     <section className="page-card mb-8 p-6 md:p-8">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+      <div className="mb-6 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="font-display text-headline-md text-on-surface">Live Dispatch</h2>
             <span className={statusMeta.className}>{statusMeta.label}</span>
           </div>
           <p className="max-w-2xl text-body-md text-on-surface-variant">
-            Matching now uses your current device location instead of just your saved hub. Stay live to receive the nearest receiver pickups around you.
+            Matching now uses your current device location instead of just your saved hub. The background heartbeat stays active across navigation, focus changes, reconnects, and quick mobile resumes while this session stays live.
           </p>
         </div>
 
         <button
           type="button"
-          onClick={() => void (isLive ? stopLiveDispatch() : startLiveDispatch())}
+          onClick={() => void (isLive ? goOffline() : goLive())}
           disabled={isLoading || isUpdating}
           className={`rounded-xl px-6 py-3 text-sm font-semibold shadow-md transition-opacity disabled:cursor-not-allowed disabled:opacity-60 ${
             isLive ? "border border-primary/15 bg-white text-primary" : "bg-primary text-white"
@@ -308,31 +116,73 @@ export function AgentLivePresencePanel({ fallbackHub }: AgentLivePresencePanelPr
         </button>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <div className="rounded-2xl bg-surface-container-low p-4">
-          <div className="text-caption text-on-surface-variant">Current coordinates</div>
-          <div className="mt-2 text-sm font-semibold text-on-surface">
-            {formatCoordinates(presence?.latitude ?? null, presence?.longitude ?? null)}
+      <div className="grid gap-6 lg:grid-cols-12">
+        <div className="space-y-4 lg:col-span-7">
+          <div className="overflow-hidden rounded-[1.75rem] border border-stone-200/70 bg-surface-container-low p-3">
+            {mapEmbedUrl ? (
+              <PickupMapEmbed
+                title={liveCoordinates ? "Agent live dispatch map" : "Agent fallback hub map"}
+                src={mapEmbedUrl}
+                className="h-[280px]"
+              />
+            ) : (
+              <div className="flex h-[280px] items-center justify-center rounded-2xl bg-stone-100 text-sm text-on-surface-variant">
+                Map becomes available once a saved hub or live device location is present.
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl bg-surface-container-low p-4">
+              <div className="text-caption text-on-surface-variant">Map source</div>
+              <div className="mt-2 text-sm font-semibold text-on-surface">{locationSource}</div>
+            </div>
+            <div className="rounded-2xl bg-surface-container-low p-4">
+              <div className="text-caption text-on-surface-variant">Saved hub drift</div>
+              <div className="mt-2 text-sm font-semibold text-on-surface">{hubDriftLabel ?? "Waiting for live GPS"}</div>
+            </div>
           </div>
         </div>
 
-        <div className="rounded-2xl bg-surface-container-low p-4">
-          <div className="text-caption text-on-surface-variant">Location accuracy</div>
-          <div className="mt-2 text-sm font-semibold text-on-surface">
-            {typeof presence?.accuracyMeters === "number" ? `${Math.round(presence.accuracyMeters)} m` : "Waiting for GPS"}
+        <div className="space-y-4 lg:col-span-5">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1">
+            <div className="rounded-2xl bg-surface-container-low p-4">
+              <div className="text-caption text-on-surface-variant">Current coordinates</div>
+              <div className="mt-2 text-sm font-semibold text-on-surface">
+                {formatCoordinates(presence?.latitude ?? null, presence?.longitude ?? null)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-surface-container-low p-4">
+              <div className="text-caption text-on-surface-variant">Location accuracy</div>
+              <div className="mt-2 text-sm font-semibold text-on-surface">{accuracyLabel}</div>
+            </div>
           </div>
-        </div>
 
-        <div className="rounded-2xl bg-surface-container-low p-4">
-          <div className="text-caption text-on-surface-variant">Fallback hub</div>
-          <div className="mt-2 text-sm font-semibold text-on-surface">{fallbackHub}</div>
-        </div>
-      </div>
+          <div className="rounded-2xl bg-surface-container-low p-4">
+            <div className="text-caption text-on-surface-variant">Fallback hub</div>
+            <div className="mt-2 font-semibold text-on-surface">{fallbackHub}</div>
+            <div className="mt-1 text-sm text-on-surface-variant">{fallbackAddress}</div>
+          </div>
 
-      <div className="mt-4 rounded-2xl bg-primary/5 px-4 py-4 text-sm text-on-surface-variant">
-        <div className="font-semibold text-on-surface">{message}</div>
-        <div className="mt-2">
-          Last heartbeat: <span className="font-semibold text-on-surface">{formatLastSeen(presence?.lastSeenAt ?? null)}</span>
+          <div className="rounded-2xl bg-primary/5 px-4 py-4 text-sm text-on-surface-variant">
+            <div className="font-semibold text-on-surface">{message}</div>
+            <div className="mt-2">
+              Last heartbeat: <span className="font-semibold text-on-surface">{formatLastSeen(presence?.lastSeenAt ?? null)}</span>
+            </div>
+          </div>
+
+          <a
+            href={openMapHref}
+            target="_blank"
+            rel="noreferrer"
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold ${
+              mapCoordinates ? "border border-primary/15 bg-white text-primary" : "pointer-events-none border border-stone-200 bg-white text-stone-400"
+            }`}
+          >
+            <Icon name="map" className="text-[18px]" />
+            Open current pin
+          </a>
         </div>
       </div>
     </section>
