@@ -70,8 +70,6 @@ export function AppShell({
           </nav>
 
           <div className="flex items-center gap-3">
-            <Icon name="notifications" className="rounded-lg p-2 text-stone-500 transition-colors hover:bg-stone-100" />
-            <Icon name="settings" className="rounded-lg p-2 text-stone-500 transition-colors hover:bg-stone-100" />
             <AuthControls />
             <WalletControls showAvatar={showAvatar} />
           </div>

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { authFetch } from "@/lib/client-auth";
 import type { AppAgentPresence } from "@/lib/agent-presence";
 
 type CoordinatesSnapshot = {
@@ -129,7 +130,7 @@ export function AgentPresenceRuntimeProvider({ children }: { children: ReactNode
     lastKnownCoordinatesRef.current = coordinates;
     lastSentAtRef.current = Date.now();
 
-    const response = await fetch("/api/agent-presence", {
+    const response = await authFetch("/api/agent-presence", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -283,7 +284,7 @@ export function AgentPresenceRuntimeProvider({ children }: { children: ReactNode
     setIsUpdating(true);
 
     try {
-      const response = await fetch("/api/agent-presence", {
+      const response = await authFetch("/api/agent-presence", {
         method: "DELETE"
       });
       const payload = (await response.json()) as {
@@ -308,7 +309,7 @@ export function AgentPresenceRuntimeProvider({ children }: { children: ReactNode
   useEffect(() => {
     const hydrateRuntime = async () => {
       try {
-        const sessionResponse = await fetch("/api/auth/session", {
+        const sessionResponse = await authFetch("/api/auth/session", {
           method: "GET",
           cache: "no-store"
         });
@@ -330,7 +331,7 @@ export function AgentPresenceRuntimeProvider({ children }: { children: ReactNode
           return;
         }
 
-        const presenceResponse = await fetch("/api/agent-presence", {
+        const presenceResponse = await authFetch("/api/agent-presence", {
           method: "GET",
           cache: "no-store"
         });

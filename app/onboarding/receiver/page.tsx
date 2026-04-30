@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { ChoiceChip, FeatureBullet, OnboardingHero, ProgressPanel, SectionCard, StatCard, StepTabs } from "@/components/onboarding-kit";
+import { authFetch } from "@/lib/client-auth";
 
 const receiverStepMeta = [
   { title: "Alert", detail: "SMS" },
@@ -13,7 +14,6 @@ const receiverStepMeta = [
 
 type DeliveryChannel = "SMS" | "WhatsApp";
 type ProfileUser = {
-  role: "sender" | "agent" | "receiver";
   phoneNumber: string;
   displayName: string;
 };
@@ -42,7 +42,7 @@ export default function ReceiverOnboardingPage() {
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const response = await fetch("/api/profile", {
+        const response = await authFetch("/api/profile", {
           method: "GET",
           cache: "no-store"
         });
@@ -59,11 +59,6 @@ export default function ReceiverOnboardingPage() {
         }
 
         const user = payload.user as ProfileUser;
-
-        if (user.role !== "receiver") {
-          router.replace(payload.redirectPath ?? "/auth");
-          return;
-        }
 
         setMobileNumber(user.phoneNumber);
 
@@ -97,7 +92,7 @@ export default function ReceiverOnboardingPage() {
     setCompletionMessage("");
 
     try {
-      const response = await fetch("/api/profile", {
+      const response = await authFetch("/api/profile", {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json"

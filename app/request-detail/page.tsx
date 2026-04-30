@@ -158,11 +158,6 @@ export default async function RequestDetailPage({
     "use server";
 
     const sender = await requireSignedInUser();
-
-    if (sender.role !== "sender") {
-      redirect(getRoleHomePath(sender.role));
-    }
-
     const updatedRequest = await cancelPayoutRequest({
       requestId: String(formData.get("requestId") ?? ""),
       senderUser: sender
@@ -199,11 +194,13 @@ export default async function RequestDetailPage({
 
   const status = getStatusMeta(request);
   const timeline = buildTimeline(request);
-  const canAccept = user.role === "agent" && request.status === "open";
-  const canCancel = user.role === "sender" && request.status === "open";
+  const canAccept = Boolean(user.agentProfile && user.walletAddress && request.status === "open");
+  const canCancel = request.senderUserId === user.id && request.status === "open";
   const canComplete =
     request.status === "accepted" &&
-    ((user.role === "agent" && request.assignedAgent?.userId === user.id) || user.role === "receiver");
+    ((user.role === "agent" && request.assignedAgent?.userId === user.id) ||
+      request.receiverPhone === user.phoneNumber ||
+      request.senderUserId === user.id);
 
   return (
     <AppShell activeNav="request" mobileActive="activity" mainClassName="py-6 md:py-8" mobileProfileHref={homeHref}>

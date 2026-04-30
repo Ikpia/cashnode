@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { ChoiceChip, FeatureBullet, OnboardingHero, ProgressPanel, SectionCard, StatCard, StepTabs, UploadTile } from "@/components/onboarding-kit";
 import { useWallet } from "@/components/wallet-provider";
+import { authFetch } from "@/lib/client-auth";
 import { lagosPickupLocations } from "@/lib/pickup-locations";
 import { formatWalletAddress } from "@/lib/solana-wallet";
 
@@ -15,7 +16,6 @@ const agentStepMeta = [
 ] as const;
 
 type ProfileUser = {
-  role: "sender" | "agent" | "receiver";
   phoneNumber: string;
   displayName: string;
   walletAddress: string | null;
@@ -62,7 +62,7 @@ export default function AgentOnboardingPage() {
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const response = await fetch("/api/profile", {
+        const response = await authFetch("/api/profile", {
           method: "GET",
           cache: "no-store"
         });
@@ -79,11 +79,6 @@ export default function AgentOnboardingPage() {
         }
 
         const user = payload.user as ProfileUser;
-
-        if (user.role !== "agent") {
-          router.replace(payload.redirectPath ?? "/auth");
-          return;
-        }
 
         setPhoneNumber(user.phoneNumber);
         setSettlementNote(user.walletAddress ?? "");
@@ -146,7 +141,7 @@ export default function AgentOnboardingPage() {
     setActivationMessage("");
 
     try {
-      const response = await fetch("/api/profile", {
+      const response = await authFetch("/api/profile", {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json"

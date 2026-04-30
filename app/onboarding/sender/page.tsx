@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { ChoiceChip, FeatureBullet, OnboardingHero, ProgressPanel, SectionCard, StepTabs } from "@/components/onboarding-kit";
+import { authFetch } from "@/lib/client-auth";
 
 const senderStepMeta = [
   { title: "Basics", detail: "Profile" },
@@ -24,7 +25,6 @@ type SenderRecord = {
   walletNote: string;
 };
 type ProfileUser = {
-  role: "sender" | "agent" | "receiver";
   phoneNumber: string;
   displayName: string;
   walletAddress: string | null;
@@ -63,7 +63,7 @@ export default function SenderOnboardingPage() {
 
   const syncSessionVerification = async (recordId: string) => {
     try {
-      const response = await fetch("/api/onboarding/sender/session-verify", {
+      const response = await authFetch("/api/onboarding/sender/session-verify", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -92,7 +92,7 @@ export default function SenderOnboardingPage() {
   useEffect(() => {
     const loadProfileAndDraft = async () => {
       try {
-        const profileResponse = await fetch("/api/profile", {
+        const profileResponse = await authFetch("/api/profile", {
           method: "GET",
           cache: "no-store"
         });
@@ -109,11 +109,6 @@ export default function SenderOnboardingPage() {
         }
 
         const user = profilePayload.user as ProfileUser;
-
-        if (user.role !== "sender") {
-          router.replace(profilePayload.redirectPath ?? "/auth");
-          return;
-        }
 
         setSessionProfile(user);
         setMobileNumber(user.phoneNumber);
@@ -132,7 +127,7 @@ export default function SenderOnboardingPage() {
           return;
         }
 
-        const draftResponse = await fetch(`/api/onboarding/sender?onboardingId=${savedOnboardingId}`, {
+        const draftResponse = await authFetch(`/api/onboarding/sender?onboardingId=${savedOnboardingId}`, {
           method: "GET",
           cache: "no-store"
         });
@@ -196,7 +191,7 @@ export default function SenderOnboardingPage() {
     setDraftMessage("");
 
     try {
-      const response = await fetch("/api/onboarding/sender", {
+      const response = await authFetch("/api/onboarding/sender", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -268,7 +263,7 @@ export default function SenderOnboardingPage() {
     setFundingMessage("");
 
     try {
-      const fundingResponse = await fetch("/api/onboarding/sender/funding", {
+      const fundingResponse = await authFetch("/api/onboarding/sender/funding", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -285,7 +280,7 @@ export default function SenderOnboardingPage() {
         throw new Error(fundingPayload.error ?? "Unable to save funding details.");
       }
 
-      const profileResponse = await fetch("/api/profile", {
+      const profileResponse = await authFetch("/api/profile", {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json"

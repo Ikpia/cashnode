@@ -149,7 +149,7 @@ function calculateAgentRating(transferCount: number) {
 }
 
 function ensureAgentDispatchProfile(agentUser: AppUser) {
-  if (agentUser.role !== "agent" || !agentUser.agentProfile || !agentUser.walletAddress) {
+  if (!agentUser.agentProfile || !agentUser.walletAddress) {
     throw new Error("This agent is not fully configured for live dispatch yet.");
   }
 
@@ -476,15 +476,21 @@ export async function listAvailablePayoutRequests(agentUser?: AppUser) {
     return documents.map(serializePayoutRequest);
   }
 
-  if (agentUser.role !== "agent" || !agentUser.agentProfile || !agentUser.walletAddress) {
+  if (!agentUser.agentProfile || !agentUser.walletAddress) {
     return [];
   }
 
   const livePresence = await getFreshOnlineAgentPresenceByUserId(agentUser.id);
-
-  if (!livePresence) {
-    return [];
-  }
+  const referenceCoordinates =
+    livePresence && typeof livePresence.latitude === "number" && typeof livePresence.longitude === "number"
+      ? {
+          latitude: livePresence.latitude,
+          longitude: livePresence.longitude
+        }
+      : {
+          latitude: agentUser.agentProfile.serviceLatitude,
+          longitude: agentUser.agentProfile.serviceLongitude
+        };
 
   const { activeLoadByAgentId } = await getAgentRequestLoadStats(collection, [agentUser.id]);
   const remainingCapacityNgn = agentUser.agentProfile.dailyCapacityNgn - (activeLoadByAgentId.get(agentUser.id) ?? 0);
@@ -493,14 +499,14 @@ export async function listAvailablePayoutRequests(agentUser?: AppUser) {
     .filter((document) => document.estimatedLocalAmount <= remainingCapacityNgn)
     .sort((left, right) => {
       const leftDistance = calculateDistanceKm(
-        ensureLivePresenceCoordinates(livePresence.latitude, livePresence.longitude),
+        ensureLivePresenceCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
         {
           latitude: left.pickupLatitude ?? resolvePickupLocation(left.pickupArea || left.pickupLocation).latitude,
           longitude: left.pickupLongitude ?? resolvePickupLocation(left.pickupArea || left.pickupLocation).longitude
         }
       );
       const rightDistance = calculateDistanceKm(
-        ensureLivePresenceCoordinates(livePresence.latitude, livePresence.longitude),
+        ensureLivePresenceCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
         {
           latitude: right.pickupLatitude ?? resolvePickupLocation(right.pickupArea || right.pickupLocation).latitude,
           longitude: right.pickupLongitude ?? resolvePickupLocation(right.pickupArea || right.pickupLocation).longitude
@@ -545,19 +551,12 @@ export async function getPayoutRequestByIdForUser(requestId: string, user: AppUs
     return null;
   }
 
-  if (user.role === "sender" && document.senderUserId.toHexString() !== user.id) {
-    throw new Error("You do not have access to this request.");
-  }
+  const isSender = document.senderUserId.toHexString() === user.id;
+  const isReceiverByPhone = document.receiverPhone === user.phoneNumber;
+  const isAssignedAgent = document.assignedAgent?.userId.toHexString() === user.id;
+  const canViewOpenAgentRequest = Boolean(user.agentProfile && user.walletAddress && document.status === "open");
 
-  if (user.role === "receiver" && document.receiverPhone !== user.phoneNumber) {
-    throw new Error("You do not have access to this request.");
-  }
-
-  if (
-    user.role === "agent" &&
-    document.status !== "open" &&
-    document.assignedAgent?.userId.toHexString() !== user.id
-  ) {
+  if (!isSender && !isReceiverByPhone && !isAssignedAgent && !canViewOpenAgentRequest) {
     throw new Error("You do not have access to this request.");
   }
 
@@ -566,17 +565,14 @@ export async function getPayoutRequestByIdForUser(requestId: string, user: AppUs
 
 export async function getLatestRelevantPayoutRequest(user: AppUser) {
   const collection = await getPayoutRequestsCollection();
-  const filter =
-    user.role === "sender"
-      ? { senderUserId: ensureObjectId(user.id, "sender user id") }
-      : user.role === "receiver"
-        ? { receiverPhone: user.phoneNumber }
-        : {
-            $or: [
-              { "assignedAgent.userId": ensureObjectId(user.id, "agent user id") },
-              { status: "open" as const }
-            ]
-          };
+  const filter = {
+    $or: [
+      { senderUserId: ensureObjectId(user.id, "sender user id") },
+      { receiverPhone: user.phoneNumber },
+      { "assignedAgent.userId": ensureObjectId(user.id, "agent user id") },
+      ...(user.agentProfile && user.walletAddress ? [{ status: "open" as const }] : [])
+    ]
+  };
 
   const document = await collection
     .find(filter)
@@ -601,10 +597,16 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
   ensureStatusTransition(document.status, "open");
   const agentProfile = ensureAgentDispatchProfile(input.agentUser);
   const livePresence = await getFreshOnlineAgentPresenceByUserId(input.agentUser.id);
-
-  if (!livePresence) {
-    throw new Error("Go live and share your current location before accepting overflow requests.");
-  }
+  const dispatchCoordinates =
+    livePresence && typeof livePresence.latitude === "number" && typeof livePresence.longitude === "number"
+      ? {
+          latitude: livePresence.latitude,
+          longitude: livePresence.longitude
+        }
+      : {
+          latitude: agentProfile.serviceLatitude,
+          longitude: agentProfile.serviceLongitude
+        };
 
   const { activeLoadByAgentId, completedCountByAgentId } = await getAgentRequestLoadStats(collection, [input.agentUser.id]);
   const currentActiveLoad = activeLoadByAgentId.get(input.agentUser.id) ?? 0;
@@ -615,7 +617,7 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
 
   const resolvedPickupLocation = resolvePickupLocation(document.pickupArea || document.pickupLocation);
   const distanceKm = calculateDistanceKm(
-    ensureLivePresenceCoordinates(livePresence.latitude, livePresence.longitude),
+    ensureLivePresenceCoordinates(dispatchCoordinates.latitude, dispatchCoordinates.longitude),
     {
       latitude: document.pickupLatitude ?? resolvedPickupLocation.latitude,
       longitude: document.pickupLongitude ?? resolvedPickupLocation.longitude
@@ -659,18 +661,12 @@ export async function completePayoutRequest(input: { requestId: string; actorUse
 
   ensureStatusTransition(document.status, "accepted");
 
-  if (input.actorUser.role === "receiver" && document.receiverPhone !== input.actorUser.phoneNumber) {
-    throw new Error("You do not have permission to complete this request.");
-  }
+  const isAssignedAgent =
+    input.actorUser.role === "agent" && document.assignedAgent?.userId.toHexString() === input.actorUser.id;
+  const isSender = document.senderUserId.toHexString() === input.actorUser.id;
+  const isReceiverByPhone = document.receiverPhone === input.actorUser.phoneNumber;
 
-  if (
-    input.actorUser.role === "agent" &&
-    document.assignedAgent?.userId.toHexString() !== input.actorUser.id
-  ) {
-    throw new Error("You do not have permission to complete this request.");
-  }
-
-  if (input.actorUser.role === "sender" && document.senderUserId.toHexString() !== input.actorUser.id) {
+  if (!isAssignedAgent && !isSender && !isReceiverByPhone) {
     throw new Error("You do not have permission to complete this request.");
   }
 

@@ -7,8 +7,8 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   const user = await getCurrentSessionUser();
 
-  if (!user || user.role !== "sender") {
-    return NextResponse.json({ error: "Only signed-in senders can confirm sender verification." }, { status: 403 });
+  if (!user) {
+    return NextResponse.json({ error: "Only signed-in users can confirm sender verification." }, { status: 403 });
   }
 
   try {

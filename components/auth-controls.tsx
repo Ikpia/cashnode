@@ -3,8 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
-import { getFirebaseClientAuth } from "@/lib/firebase-client";
+import { authFetch, clearStoredAuthToken } from "@/lib/client-auth";
 
 type SessionUser = {
   phoneNumber: string;
@@ -32,7 +31,7 @@ export function AuthControls() {
   useEffect(() => {
     const loadSession = async () => {
       try {
-        const response = await fetch("/api/auth/session", {
+        const response = await authFetch("/api/auth/session", {
           method: "GET",
           cache: "no-store"
         });
@@ -57,16 +56,11 @@ export function AuthControls() {
     setIsSigningOut(true);
 
     try {
-      await fetch("/api/auth/session", {
+      await authFetch("/api/auth/session", {
         method: "DELETE"
       });
     } finally {
-      try {
-        await signOut(getFirebaseClientAuth());
-      } catch {
-        // no-op: the session cookie is the source of truth for server access
-      }
-
+      clearStoredAuthToken();
       setUser(null);
       setIsSigningOut(false);
       router.push("/auth");

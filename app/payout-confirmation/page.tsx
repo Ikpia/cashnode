@@ -84,7 +84,9 @@ export default async function PayoutConfirmationPage({
 
   const canComplete =
     request.status === "accepted" &&
-    ((user.role === "agent" && request.assignedAgent?.userId === user.id) || user.role === "receiver");
+    ((user.role === "agent" && request.assignedAgent?.userId === user.id) ||
+      request.receiverPhone === user.phoneNumber ||
+      request.senderUserId === user.id);
 
   return (
     <AppShell activeNav="payout" mobileActive="wallet" mainClassName="flex flex-col items-center py-8" mobileProfileHref={homeHref}>

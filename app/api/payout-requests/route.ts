@@ -25,29 +25,26 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
-  if (user.role === "sender") {
-    const requests = await listSenderPayoutRequests(user.id);
-    return NextResponse.json({ requests });
-  }
+  const [sentRequests, receiverRequests, availableRequests, assignedRequests] = await Promise.all([
+    listSenderPayoutRequests(user.id),
+    listReceiverPayoutRequests(user.phoneNumber),
+    listAvailablePayoutRequests(user.agentProfile ? user : undefined),
+    user.agentProfile ? listAssignedAgentPayoutRequests(user.id) : Promise.resolve([])
+  ]);
 
-  if (user.role === "agent") {
-    const [availableRequests, assignedRequests] = await Promise.all([
-      listAvailablePayoutRequests(user),
-      listAssignedAgentPayoutRequests(user.id)
-    ]);
-
-    return NextResponse.json({ availableRequests, assignedRequests });
-  }
-
-  const requests = await listReceiverPayoutRequests(user.phoneNumber);
-  return NextResponse.json({ requests });
+  return NextResponse.json({
+    sentRequests,
+    receiverRequests,
+    availableRequests,
+    assignedRequests
+  });
 }
 
 export async function POST(request: Request) {
   const user = await getCurrentSessionUser();
 
-  if (!user || user.role !== "sender") {
-    return NextResponse.json({ error: "Only signed-in senders can create payout requests." }, { status: 403 });
+  if (!user) {
+    return NextResponse.json({ error: "Only signed-in users can create payout requests." }, { status: 403 });
   }
 
   try {

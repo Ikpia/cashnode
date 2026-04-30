@@ -1,15 +1,34 @@
 import { NextResponse } from "next/server";
-import { getFirebaseAdminAuth } from "@/lib/firebase-admin";
-import { getCurrentSessionUser, getUserEntryPath, SESSION_COOKIE_NAME, SESSION_EXPIRES_IN_MS } from "@/lib/auth-session";
+import { cookies } from "next/headers";
+import {
+  clearSessionByCookieToken,
+  createSessionForUser,
+  getCurrentSessionUser,
+  getUserEntryPath,
+  SESSION_COOKIE_NAME,
+  SESSION_EXPIRES_IN_MS
+} from "@/lib/auth-session";
+import { authenticateWithPin, signupWithWhatsAppPin } from "@/lib/local-auth";
 import { getUserFirstName } from "@/lib/user-greeting";
-import { upsertUserFromFirebaseLogin } from "@/lib/users";
 
 export const runtime = "nodejs";
 
-type LoginRequestBody = {
-  idToken?: string;
-  role?: "sender" | "agent" | "receiver";
+type SignupBody = {
+  action: "signup";
+  fullName?: string;
+  email?: string;
+  phoneNumber?: string;
+  whatsappCode?: string;
+  pin?: string;
 };
+
+type LoginBody = {
+  action: "login";
+  identifier?: string;
+  pin?: string;
+};
+
+type SessionBody = SignupBody | LoginBody;
 
 export async function GET() {
   const user = await getCurrentSessionUser();
@@ -28,35 +47,29 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as LoginRequestBody;
-    const idToken = typeof body.idToken === "string" ? body.idToken.trim() : "";
+    const body = (await request.json()) as SessionBody;
 
-    if (!idToken) {
-      return NextResponse.json({ error: "idToken is required." }, { status: 400 });
+    if (body.action !== "signup" && body.action !== "login") {
+      return NextResponse.json({ error: "A valid auth action is required." }, { status: 400 });
     }
 
-    if (body.role !== "sender" && body.role !== "agent" && body.role !== "receiver") {
-      return NextResponse.json({ error: "A valid role is required." }, { status: 400 });
-    }
-
-    const decodedToken = await getFirebaseAdminAuth().verifyIdToken(idToken);
-
-    if (!decodedToken.phone_number) {
-      return NextResponse.json({ error: "Firebase login is missing a verified phone number." }, { status: 400 });
-    }
-
-    const user = await upsertUserFromFirebaseLogin({
-      firebaseUid: decodedToken.uid,
-      phoneNumber: decodedToken.phone_number,
-      requestedRole: body.role
-    });
-
-    const sessionCookie = await getFirebaseAdminAuth().createSessionCookie(idToken, {
-      expiresIn: SESSION_EXPIRES_IN_MS
-    });
-
+    const user =
+      body.action === "signup"
+        ? await signupWithWhatsAppPin({
+            fullName: body.fullName,
+            email: body.email,
+            phoneNumber: body.phoneNumber,
+            whatsappCode: body.whatsappCode,
+            pin: body.pin
+          })
+        : await authenticateWithPin({
+            identifier: body.identifier,
+            pin: body.pin
+          });
+    const sessionToken = await createSessionForUser(user.id);
     const response = NextResponse.json({
       authenticated: true,
+      token: sessionToken,
       user: {
         ...user,
         firstName: getUserFirstName(user)
@@ -64,7 +77,7 @@ export async function POST(request: Request) {
       redirectPath: getUserEntryPath(user)
     });
 
-    response.cookies.set(SESSION_COOKIE_NAME, sessionCookie, {
+    response.cookies.set(SESSION_COOKIE_NAME, sessionToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
@@ -74,13 +87,18 @@ export async function POST(request: Request) {
 
     return response;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to create the auth session.";
+    const message = error instanceof Error ? error.message : "Unable to authenticate right now.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 
 export async function DELETE() {
   const response = NextResponse.json({ success: true });
+  const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? "";
+
+  if (sessionCookie) {
+    await clearSessionByCookieToken(sessionCookie);
+  }
 
   response.cookies.set(SESSION_COOKIE_NAME, "", {
     httpOnly: true,
