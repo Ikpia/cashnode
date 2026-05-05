@@ -84,7 +84,7 @@ export async function requireUserRole(role: UserRole) {
   const sessionUser = await requireSignedInUser();
 
   if (role === "agent") {
-    if (sessionUser.onboardingStatus !== "active" || !sessionUser.agentProfile || !sessionUser.walletAddress) {
+    if (sessionUser.onboardingStatus !== "active" || !sessionUser.agentProfile) {
       redirect("/onboarding/agent");
     }
   }

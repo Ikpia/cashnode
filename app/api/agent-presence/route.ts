@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { hasAgentCapability } from "@/lib/agent-capability";
 import { getCurrentSessionUser } from "@/lib/auth-session";
 import { getAgentPresenceByUserId, markAgentPresenceOffline, upsertAgentPresenceOnline } from "@/lib/agent-presence";
 
@@ -13,7 +14,7 @@ type PresenceBody = {
 export async function GET() {
   const user = await getCurrentSessionUser();
 
-  if (!user || user.role !== "agent") {
+  if (!user || !hasAgentCapability(user)) {
     return NextResponse.json({ error: "Only signed-in agents can read presence." }, { status: 403 });
   }
 
@@ -27,7 +28,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getCurrentSessionUser();
 
-  if (!user || user.role !== "agent") {
+  if (!user || !hasAgentCapability(user)) {
     return NextResponse.json({ error: "Only signed-in agents can update presence." }, { status: 403 });
   }
 
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
 export async function DELETE() {
   const user = await getCurrentSessionUser();
 
-  if (!user || user.role !== "agent") {
+  if (!user || !hasAgentCapability(user)) {
     return NextResponse.json({ error: "Only signed-in agents can update presence." }, { status: 403 });
   }
 

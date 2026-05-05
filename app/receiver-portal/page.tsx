@@ -8,11 +8,8 @@ import { PickupMapEmbed } from "@/components/pickup-map-embed";
 import { Icon } from "@/components/ui/icon";
 import { images } from "@/lib/cashnode-data";
 
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD"
-  }).format(value);
+function formatUsdt(value: number) {
+  return `${value.toFixed(2)} USDT`;
 }
 
 function buildPickupTimeline(request: PayoutRequestRecord | null) {
@@ -33,7 +30,7 @@ function buildPickupTimeline(request: PayoutRequestRecord | null) {
         ? new Date(request.assignedAgent.acceptedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
         : "Waiting for assignment",
       copy: request.assignedAgent
-        ? `${request.assignedAgent.name} was matched as the closest live eligible cash-out agent and is ready for handoff.`
+        ? `${request.assignedAgent.name} was matched as the closest eligible cash-out agent and is ready for handoff.`
         : "A nearby agent will accept the request soon.",
       done: Boolean(request.assignedAgent),
       active: !request.assignedAgent
@@ -107,7 +104,7 @@ export default async function ReceiverPortalPage() {
 
             <div className="page-card min-w-[280px] rounded-[1.75rem] p-5">
               <div className="mb-2 text-sm font-semibold text-on-surface-variant">Amount available</div>
-              <div className="font-display text-[2rem] font-bold tracking-[-0.03em] text-primary">{formatUsd(activeRequest.amountUsd)}</div>
+              <div className="font-display text-[2rem] font-bold tracking-[-0.03em] text-primary">{formatUsdt(activeRequest.tokenAmount)}</div>
               <div className="mt-2 text-sm text-on-surface-variant">Reference: {activeRequest.reference}</div>
             </div>
           </div>

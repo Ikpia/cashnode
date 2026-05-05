@@ -2,20 +2,16 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUserRole } from "@/lib/auth-session";
+import { PickupLocationSelector } from "@/components/pickup-location-selector";
 import { cancelPayoutRequest, createPayoutRequest, listSenderPayoutRequests, type PayoutRequestRecord } from "@/lib/payout-requests";
-import { lagosPickupLocations } from "@/lib/pickup-locations";
+import { nigeriaPickupLocations } from "@/lib/pickup-locations";
 import { getWelcomeGreeting } from "@/lib/user-greeting";
 import { updateUserProfile } from "@/lib/users";
 import { AppShell } from "@/components/app-shell";
 import { Icon } from "@/components/ui/icon";
 
-const pickupAreas = lagosPickupLocations.map((location) => location.area);
-
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD"
-  }).format(value);
+function formatUsdt(value: number) {
+  return `${value.toFixed(2)} USDT`;
 }
 
 function formatDate(value: string) {
@@ -82,7 +78,12 @@ function buildTrackingSteps(request: PayoutRequestRecord | null) {
   ];
 }
 
-export default async function SenderDashboardPage() {
+export default async function SenderDashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error: formError } = await searchParams;
   const user = await requireUserRole("sender");
   const requests = await listSenderPayoutRequests(user.id);
   const latestRequest = requests[0] ?? null;
@@ -90,21 +91,30 @@ export default async function SenderDashboardPage() {
   const trackingSteps = buildTrackingSteps(latestActiveRequest);
   const totalFlow = requests
     .filter((request) => request.status !== "cancelled")
-    .reduce((sum, request) => sum + request.totalUsd, 0);
+    .reduce((sum, request) => sum + request.totalToken, 0);
   const welcomeGreeting = getWelcomeGreeting(user, "Welcome back.");
 
   async function createPayoutAction(formData: FormData) {
     "use server";
 
     const sender = await requireUserRole("sender");
-    const payoutRequest = await createPayoutRequest({
-      senderUser: sender,
-      amountUsd: Number(formData.get("amountUsd") ?? 0),
-      receiverName: String(formData.get("receiverName") ?? ""),
-      receiverPhone: String(formData.get("receiverPhone") ?? ""),
-      pickupArea: String(formData.get("pickupArea") ?? ""),
-      notes: String(formData.get("notes") ?? "")
-    });
+    let payoutRequest;
+    try {
+      payoutRequest = await createPayoutRequest({
+        senderUser: sender,
+        tokenType: "USDT",
+        tokenAmount: Number(formData.get("tokenAmount") ?? 0),
+        receiverName: String(formData.get("receiverName") ?? ""),
+        receiverPhone: String(formData.get("receiverPhone") ?? ""),
+        pickupArea: String(formData.get("pickupArea") ?? ""),
+        pickupLocationDetail: String(formData.get("pickupLocationDetail") ?? ""),
+        notes: String(formData.get("notes") ?? "")
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "An unexpected error occurred. Please try again.";
+      redirect(`/sender-dashboard?error=${encodeURIComponent(message)}`);
+    }
 
     if (sender.onboardingStatus !== "active") {
       await updateUserProfile({
@@ -143,7 +153,7 @@ export default async function SenderDashboardPage() {
           <div>
             <p className="mb-2 text-sm font-semibold text-primary">{welcomeGreeting}</p>
             <p className="mb-2 text-sm text-stone-500">Total Payout Flow</p>
-            <h1 className="font-display text-[3.2rem] font-bold tracking-[-0.03em] text-on-surface">{formatUsd(totalFlow || 0)}</h1>
+            <h1 className="font-display text-[3.2rem] font-bold tracking-[-0.03em] text-on-surface">{formatUsdt(totalFlow || 0)}</h1>
             <span className="status-success mt-3 inline-flex">{requests.length} requests created</span>
           </div>
 
@@ -163,14 +173,21 @@ export default async function SenderDashboardPage() {
           <section className="page-card p-8">
             <h2 className="mb-6 font-display text-headline-md text-on-surface">Create Payout Request</h2>
 
+            {formError ? (
+              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <strong className="font-semibold">Could not create payout: </strong>{formError}
+              </div>
+            ) : null}
+
             <form action={createPayoutAction} className="space-y-6">
               <div className="grid gap-6 md:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="text-sm font-semibold text-stone-600">Amount (USD)</span>
+                  <span className="text-sm font-semibold text-stone-600">Amount (USDT)</span>
                   <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400">$</span>
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400">T</span>
                     <input
-                      name="amountUsd"
+                      id="sender-token-amount"
+                      name="tokenAmount"
                       type="number"
                       min="1"
                       step="0.01"
@@ -205,19 +222,9 @@ export default async function SenderDashboardPage() {
                   />
                 </label>
 
-                <label className="space-y-2">
-                  <span className="text-sm font-semibold text-stone-600">Pickup Location</span>
-                  <select
-                    name="pickupArea"
-                    className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
-                    defaultValue={pickupAreas[0]}
-                  >
-                    {pickupAreas.map((area) => (
-                      <option key={area}>{area}</option>
-                    ))}
-                  </select>
-                </label>
               </div>
+
+              <PickupLocationSelector locations={nigeriaPickupLocations} />
 
               <label className="space-y-2">
                 <span className="text-sm font-semibold text-stone-600">Notes (Optional)</span>
@@ -230,7 +237,7 @@ export default async function SenderDashboardPage() {
               </label>
 
               <div className="rounded-2xl bg-primary/5 px-4 py-4 text-sm text-on-surface-variant">
-                CashNode will try to match the closest live eligible POS agent to the receiver&apos;s selected pickup area as soon as you create this payout.
+                You pay in USDT (requested amount + processing + agent fee). The receiver gets the NGN cash equivalent of the requested amount at pickup.
               </div>
 
               <button type="submit" className="primary-gradient w-full rounded-xl px-6 py-4 text-lg font-semibold text-white shadow-md">
@@ -284,7 +291,12 @@ export default async function SenderDashboardPage() {
                             <div>{request.pickupArea}</div>
                             <div className="text-sm text-stone-500">{formatDate(request.updatedAt)}</div>
                           </td>
-                          <td className="px-8 py-5 text-lg font-semibold text-on-surface">{formatUsd(request.totalUsd)}</td>
+                          <td className="px-8 py-5">
+                            <div className="text-lg font-semibold text-on-surface">Pay: {formatUsdt(request.totalToken)}</div>
+                            {request.estimatedLocalAmount > 0 ? (
+                              <div className="text-sm text-on-surface-variant">Receiver gets: {request.localCurrency} {request.estimatedLocalAmount.toLocaleString()}</div>
+                            ) : null}
+                          </td>
                           <td className="px-8 py-5">
                             <span className={status.className}>{status.label}</span>
                           </td>
@@ -323,7 +335,7 @@ export default async function SenderDashboardPage() {
                   <div>
                     <p className="text-caption uppercase tracking-[0.14em] text-stone-500">Current Payout</p>
                     <p className="text-lg font-semibold text-on-surface">
-                      {latestActiveRequest.receiverName} ({formatUsd(latestActiveRequest.totalUsd)})
+                      {latestActiveRequest.receiverName} ({formatUsdt(latestActiveRequest.totalToken)})
                     </p>
                   </div>
                   <Icon name="local_shipping" filled className="text-primary" />

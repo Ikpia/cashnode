@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { hasAgentCapability } from "@/lib/agent-capability";
 import { authFetch } from "@/lib/client-auth";
 import type { AppAgentPresence } from "@/lib/agent-presence";
 
@@ -14,6 +15,8 @@ type CoordinatesSnapshot = {
 type SessionUser = {
   id: string;
   role: "sender" | "agent" | "receiver";
+  onboardingStatus: "new" | "onboarding" | "active";
+  agentProfile: Record<string, unknown> | null;
 };
 
 type AgentPresenceRuntimeContextValue = {
@@ -319,7 +322,7 @@ export function AgentPresenceRuntimeProvider({ children }: { children: ReactNode
         };
 
         const sessionUser = sessionPayload.user ?? null;
-        const nextIsAgentSession = Boolean(sessionPayload.authenticated && sessionUser?.role === "agent");
+        const nextIsAgentSession = Boolean(sessionPayload.authenticated && hasAgentCapability(sessionUser));
 
         agentSessionRef.current = nextIsAgentSession;
         setIsAgentSession(nextIsAgentSession);

@@ -14,8 +14,10 @@ type CreatePayoutBody = {
   receiverName?: string;
   receiverPhone?: string;
   pickupArea?: string;
+  pickupLocationDetail?: string;
   notes?: string;
-  amountUsd?: number | string;
+  tokenType?: "USDT";
+  tokenAmount?: number | string;
 };
 
 export async function GET() {
@@ -54,8 +56,10 @@ export async function POST(request: Request) {
       receiverName: body.receiverName ?? "",
       receiverPhone: body.receiverPhone ?? "",
       pickupArea: body.pickupArea ?? "",
+      pickupLocationDetail: body.pickupLocationDetail ?? "",
       notes: body.notes ?? "",
-      amountUsd: typeof body.amountUsd === "string" ? Number(body.amountUsd) : Number(body.amountUsd ?? 0)
+      tokenType: body.tokenType ?? "USDT",
+      tokenAmount: typeof body.tokenAmount === "string" ? Number(body.tokenAmount) : Number(body.tokenAmount ?? 0)
     });
 
     return NextResponse.json({ request: payoutRequest }, { status: 201 });

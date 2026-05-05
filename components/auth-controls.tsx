@@ -3,14 +3,23 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { hasAgentCapability } from "@/lib/agent-capability";
 import { authFetch, clearStoredAuthToken } from "@/lib/client-auth";
 
 type SessionUser = {
   phoneNumber: string;
   role: "sender" | "agent" | "receiver";
+  onboardingStatus: "new" | "onboarding" | "active";
+  agentProfile: Record<string, unknown> | null;
 };
 
-function formatRoleLabel(role: SessionUser["role"]) {
+function formatRoleLabel(user: SessionUser) {
+  if (hasAgentCapability(user)) {
+    return "POS Agent";
+  }
+
+  const role = user.role;
+
   if (role === "agent") {
     return "POS Agent";
   }
@@ -22,6 +31,43 @@ function formatRoleLabel(role: SessionUser["role"]) {
   return "Sender";
 }
 
+const SESSION_CACHE_KEY = "cashnode_session_cache";
+const SESSION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function readCachedUser(): SessionUser | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    const { user, expiresAt } = JSON.parse(raw) as { user: SessionUser | null; expiresAt: number };
+    if (Date.now() > expiresAt) {
+      sessionStorage.removeItem(SESSION_CACHE_KEY);
+      return null;
+    }
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedUser(user: SessionUser | null) {
+  try {
+    sessionStorage.setItem(
+      SESSION_CACHE_KEY,
+      JSON.stringify({ user, expiresAt: Date.now() + SESSION_CACHE_TTL_MS })
+    );
+  } catch {
+    // sessionStorage unavailable — ignore
+  }
+}
+
+function clearCachedUser() {
+  try {
+    sessionStorage.removeItem(SESSION_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function AuthControls() {
   const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -29,6 +75,14 @@ export function AuthControls() {
   const [isSigningOut, setIsSigningOut] = useState(false);
 
   useEffect(() => {
+    // Show cached user immediately to avoid the "Checking session..." flash
+    const cached = readCachedUser();
+    if (cached !== null) {
+      setUser(cached);
+      setIsLoading(false);
+      return; // skip network round-trip until cache expires
+    }
+
     const loadSession = async () => {
       try {
         const response = await authFetch("/api/auth/session", {
@@ -41,7 +95,9 @@ export function AuthControls() {
           throw new Error(payload.error ?? "Unable to load auth session.");
         }
 
-        setUser(payload.user ?? null);
+        const sessionUser: SessionUser | null = payload.user ?? null;
+        writeCachedUser(sessionUser);
+        setUser(sessionUser);
       } catch {
         setUser(null);
       } finally {
@@ -61,6 +117,7 @@ export function AuthControls() {
       });
     } finally {
       clearStoredAuthToken();
+      clearCachedUser();
       setUser(null);
       setIsSigningOut(false);
       router.push("/auth");
@@ -86,7 +143,7 @@ export function AuthControls() {
   return (
     <div className="flex items-center gap-3">
       <div className="hidden text-right md:block">
-        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-400">{formatRoleLabel(user.role)}</div>
+        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-400">{formatRoleLabel(user)}</div>
         <div className="text-sm font-medium text-stone-700">{user.phoneNumber}</div>
       </div>
       <button

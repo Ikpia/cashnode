@@ -1,6 +1,8 @@
 import { ObjectId, type Collection, type WithId } from "mongodb";
 import { getFreshOnlineAgentPresenceByUserId, listFreshOnlineAgentPresenceMap } from "@/lib/agent-presence";
+import { createBitnobUsdtNgnQuote, executeBitnobUsdtNgnPayout } from "@/lib/bitnob";
 import { getMongoDb } from "@/lib/mongodb";
+import { createPaystackTransferRecipient, initiatePaystackTransfer, verifyPaystackTransfer } from "@/lib/paystack";
 import {
   buildPickupDirectionsUrl,
   buildPickupMapEmbedUrl,
@@ -10,9 +12,56 @@ import {
   formatPickupCoordinates,
   resolvePickupLocation
 } from "@/lib/pickup-locations";
-import { getUserByPhoneAndRole, listActiveAgentUsers, type AppUser } from "@/lib/users";
+import {
+  getUserById,
+  getUserByPhoneAndRole,
+  listActiveAgentUsers,
+  type AppUser,
+  updateAgentSettlementRecipientCode
+} from "@/lib/users";
 
 export type PayoutRequestStatus = "open" | "accepted" | "completed" | "cancelled";
+export type StableToken = "USDT";
+export type SettlementStatus =
+  | "not_started"
+  | "available_for_withdrawal"
+  | "withdrawal_requested"
+  | "recipient_created"
+  | "transfer_pending"
+  | "transfer_success"
+  | "transfer_failed";
+
+type ConversionQuoteDocument = {
+  provider: "bitnob";
+  status: "quoted" | "initialized" | "processing" | "success" | "failed" | "expired";
+  quoteId: string;
+  payoutId?: string | null;
+  reference: string;
+  rate: number;
+  settlementAmountNgn: number;
+  amountToken: number;
+  feesToken: number;
+  failureReason?: string;
+  lastEventAt?: Date;
+  expiresAt: Date;
+  createdAt: Date;
+};
+
+type SettlementDocument = {
+  provider: "paystack";
+  status: SettlementStatus;
+  recipientCode?: string;
+  transferCode?: string;
+  transferReference?: string;
+  amountNgn: number;
+  currency: "NGN";
+  reason: string;
+  initiatedAt: Date;
+  lastCheckedAt?: Date;
+  completedAt?: Date;
+  failedAt?: Date;
+  failureReason?: string;
+};
 
 type AgentAssignmentDocument = {
   userId: ObjectId;
@@ -22,7 +71,12 @@ type AgentAssignmentDocument = {
   transferCount: number;
   acceptedAt: Date;
   distanceKm?: number;
+  serviceLocationId?: string;
   serviceZone?: string;
+  serviceAddress?: string;
+  serviceLatitude?: number;
+  serviceLongitude?: number;
+  locationSource?: "live_presence" | "registered_hub";
 };
 
 type PayoutRequestDocument = {
@@ -34,19 +88,24 @@ type PayoutRequestDocument = {
   receiverPhone: string;
   receiverUserId?: ObjectId;
   pickupArea: string;
+  pickupLocationDetail?: string;
   pickupLocation: string;
   pickupLatitude?: number;
   pickupLongitude?: number;
   notes: string;
-  amountUsd: number;
+  tokenType: StableToken;
+  tokenAmount: number;
   estimatedLocalAmount: number;
   localCurrency: "NGN";
-  platformFeeUsd: number;
-  agentFeeUsd: number;
-  totalUsd: number;
+  platformFeeToken: number;
+  agentFeeToken: number;
+  totalToken: number;
+  conversionQuote?: ConversionQuoteDocument;
+  settlement?: SettlementDocument;
   collectionCode: string;
   status: PayoutRequestStatus;
   assignedAgent?: AgentAssignmentDocument;
+  excludedAgentUserIds?: ObjectId[];
   completedAt?: Date;
   cancelledAt?: Date;
   createdAt: Date;
@@ -63,13 +122,51 @@ export type PayoutRequestRecord = {
   receiverPhone: string;
   receiverUserId: string | null;
   pickupArea: string;
+  pickupLocationDetail: string | null;
   pickupLocation: string;
   pickupLatitude: number;
   pickupLongitude: number;
   pickupCoordinatesLabel: string;
   pickupDirectionsUrl: string;
   pickupMapEmbedUrl: string;
+  receiverWhatsAppMessage: string;
+  receiverWhatsAppUrl: string;
   notes: string;
+  tokenType: StableToken;
+  tokenAmount: number;
+  platformFeeToken: number;
+  agentFeeToken: number;
+  totalToken: number;
+  conversionQuote: {
+    provider: "bitnob";
+    status: "quoted" | "initialized" | "processing" | "success" | "failed" | "expired";
+    quoteId: string;
+    payoutId: string | null;
+    reference: string;
+    rate: number;
+    settlementAmountNgn: number;
+    amountToken: number;
+    feesToken: number;
+    failureReason: string | null;
+    lastEventAt: string | null;
+    expiresAt: string;
+    createdAt: string;
+  } | null;
+  settlement: {
+    provider: "paystack";
+    status: SettlementStatus;
+    recipientCode: string | null;
+    transferCode: string | null;
+    transferReference: string | null;
+    amountNgn: number;
+    currency: "NGN";
+    reason: string;
+    initiatedAt: string;
+    lastCheckedAt: string | null;
+    completedAt: string | null;
+    failedAt: string | null;
+    failureReason: string | null;
+  } | null;
   amountUsd: number;
   estimatedLocalAmount: number;
   localCurrency: "NGN";
@@ -87,12 +184,34 @@ export type PayoutRequestRecord = {
     acceptedAt: string;
     distanceKm: number | null;
     distanceLabel: string | null;
+    serviceLocationId: string | null;
     serviceZone: string | null;
+    serviceAddress: string | null;
+    serviceLatitude: number | null;
+    serviceLongitude: number | null;
+    locationSource: "live_presence" | "registered_hub" | null;
   } | null;
   completedAt: string | null;
   cancelledAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type NearestEligibleAgentPreview = {
+  pickupArea: string;
+  pickupLocation: string;
+  estimatedLocalAmount: number;
+  localCurrency: "NGN";
+  nearestAgent: {
+    userId: string;
+    name: string;
+    phoneNumber: string;
+    rating: number;
+    transferCount: number;
+    distanceKm: number;
+    distanceLabel: string;
+    serviceZone: string | null;
+  } | null;
 };
 
 const COLLECTION_NAME = "payout_requests";
@@ -101,6 +220,16 @@ let indexSetupPromise: Promise<void> | null = null;
 
 function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function normalizeFiniteNumber(value: unknown, fallback = 0) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function tokenToUsd(tokenAmount: number) {
+  // MVP pricing assumption: 1 USDT ~= 1 USD
+  return roundCurrency(tokenAmount);
 }
 
 function ensureObjectId(value: string, label = "id") {
@@ -117,6 +246,10 @@ function ensureRequiredText(value: unknown, label: string) {
   }
 
   return value.trim();
+}
+
+function normalizeOptionalText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function normalizePhoneNumber(value: unknown) {
@@ -144,16 +277,148 @@ function generateCollectionCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function ensureStableToken(value: unknown): StableToken {
+  if (value === undefined || value === null || value === "") {
+    return "USDT";
+  }
+
+  if (value !== "USDT") {
+    throw new Error("Only USDT is supported in this MVP.");
+  }
+
+  return value;
+}
+
 function calculateAgentRating(transferCount: number) {
   return Math.min(4.99, Number((4.84 + Math.min(transferCount, 15) * 0.01).toFixed(2)));
 }
 
+function buildReceiverWhatsAppMessage(input: {
+  reference: string;
+  collectionCode: string;
+  amountNgn: number;
+  pickupLocation: string;
+  assignedAgentName?: string;
+  assignedAgentPhone?: string;
+}) {
+  const agentLine = input.assignedAgentName
+    ? `Agent: ${input.assignedAgentName}${input.assignedAgentPhone ? ` (${input.assignedAgentPhone})` : ""}`
+    : "Agent: awaiting assignment";
+
+  return [
+    `CashNode pickup update for ${input.reference}.`,
+    `Amount: NGN ${input.amountNgn.toLocaleString("en-NG")}.`,
+    `Pickup address: ${input.pickupLocation}.`,
+    `${agentLine}.`,
+    `Collection code: ${input.collectionCode}.`
+  ].join(" ");
+}
+
+function buildPaystackReference(requestReference: string) {
+  const base = requestReference.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const reference = `cashnode-${base}-${suffix}`;
+  return reference.length > 50 ? reference.slice(0, 50) : reference.padEnd(16, "0");
+}
+
+function computeAgentSettlementAmountNgn(input: {
+  tokenAmount: number;
+  agentFeeToken: number;
+  conversionQuote?: ConversionQuoteDocument;
+  estimatedLocalAmount: number;
+}) {
+  const conversionRate = input.conversionQuote?.rate ?? LOCAL_EXCHANGE_RATE;
+  const feeInNgn = Math.round(input.agentFeeToken * conversionRate);
+  return input.estimatedLocalAmount + feeInNgn;
+}
+
+function buildSettlementBatchReference(agentUserId: string) {
+  const base = `withdraw-${agentUserId}`.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const reference = `cashnode-${base}-${suffix}`;
+  return reference.length > 50 ? reference.slice(0, 50) : reference.padEnd(16, "0");
+}
+
+function isThirdPartyPayoutRestriction(message: string) {
+  return message.toLowerCase().includes("third party payouts");
+}
+
+function mapPaystackStatusToSettlementStatus(status: string): SettlementStatus {
+  if (status === "success") {
+    return "transfer_success";
+  }
+
+  if (status === "failed" || status === "reversed") {
+    return "transfer_failed";
+  }
+
+  return "transfer_pending";
+}
+
+function mapBitnobEventToQuoteStatus(eventName: string) {
+  const normalizedEvent = eventName.toLowerCase();
+
+  if (normalizedEvent.includes("completed") || normalizedEvent.includes("success")) {
+    return "success";
+  }
+
+  if (normalizedEvent.includes("pending") || normalizedEvent.includes("processing")) {
+    return "processing";
+  }
+
+  if (normalizedEvent.includes("initiated") || normalizedEvent.includes("initialized")) {
+    return "initialized";
+  }
+
+  if (normalizedEvent.includes("expired")) {
+    return "expired";
+  }
+
+  if (normalizedEvent.includes("failed")) {
+    return "failed";
+  }
+
+  return "quoted";
+}
+
 function ensureAgentDispatchProfile(agentUser: AppUser) {
-  if (!agentUser.agentProfile || !agentUser.walletAddress) {
+  if (!agentUser.agentProfile) {
     throw new Error("This agent is not fully configured for live dispatch yet.");
   }
 
   return agentUser.agentProfile;
+}
+
+function ensureAgentOperationalEligibility(input: { agentUser: AppUser; requestAmountNgn: number }) {
+  const agentProfile = ensureAgentDispatchProfile(input.agentUser);
+
+  if (agentProfile.manualReviewRequired) {
+    throw new Error("This agent is under manual review and cannot accept new requests yet.");
+  }
+
+  if (input.requestAmountNgn > agentProfile.maxSinglePayoutNgn) {
+    throw new Error("This payout exceeds the agent's single-request limit.");
+  }
+
+  return agentProfile;
+}
+
+function ensureAgentBankSettlementProfile(agentUser: AppUser) {
+  const agentProfile = ensureAgentDispatchProfile(agentUser);
+  const bankCode = agentProfile.settlementBankCode?.trim() ?? "";
+  const accountNumber = agentProfile.settlementAccountNumber?.trim() ?? "";
+  const accountName = agentProfile.settlementAccountName?.trim() ?? "";
+
+  if (!bankCode || !accountNumber || !accountName) {
+    throw new Error("Agent settlement account is incomplete. Add bank code, account number, and account name in agent onboarding.");
+  }
+
+  return {
+    bankCode,
+    accountNumber,
+    accountName,
+    recipientCode: agentProfile.paystackRecipientCode?.trim() || null
+  };
 }
 
 function buildAssignedAgentSnapshot(input: {
@@ -161,6 +426,7 @@ function buildAssignedAgentSnapshot(input: {
   acceptedAt: Date;
   distanceKm: number;
   transferCount: number;
+  locationSource: "live_presence" | "registered_hub";
 }): AgentAssignmentDocument {
   const agentProfile = ensureAgentDispatchProfile(input.agentUser);
 
@@ -172,13 +438,18 @@ function buildAssignedAgentSnapshot(input: {
     transferCount: input.transferCount,
     acceptedAt: input.acceptedAt,
     distanceKm: roundCurrency(input.distanceKm),
-    serviceZone: agentProfile.serviceZone
+    serviceLocationId: agentProfile.serviceLocationId,
+    serviceZone: agentProfile.serviceZone,
+    serviceAddress: agentProfile.serviceAddress,
+    serviceLatitude: agentProfile.serviceLatitude,
+    serviceLongitude: agentProfile.serviceLongitude,
+    locationSource: input.locationSource
   };
 }
 
-function ensureLivePresenceCoordinates(latitude?: number | null, longitude?: number | null) {
+function ensureCoordinates(latitude?: number | null, longitude?: number | null) {
   if (typeof latitude !== "number" || typeof longitude !== "number") {
-    throw new Error("A fresh live location is required for this agent.");
+    throw new Error("Agent coordinates are missing.");
   }
 
   return {
@@ -187,12 +458,108 @@ function ensureLivePresenceCoordinates(latitude?: number | null, longitude?: num
   };
 }
 
+function getAgentReferenceCoordinates(input: {
+  agentUser: AppUser;
+  livePresence?: {
+    latitude: number | null;
+    longitude: number | null;
+  } | null;
+}) {
+  const agentProfile = ensureAgentDispatchProfile(input.agentUser);
+  const liveLatitude = input.livePresence?.latitude;
+  const liveLongitude = input.livePresence?.longitude;
+
+  if (typeof liveLatitude === "number" && typeof liveLongitude === "number") {
+    return {
+      latitude: liveLatitude,
+      longitude: liveLongitude,
+      source: "live_presence" as const
+    };
+  }
+
+  return {
+    latitude: agentProfile.serviceLatitude,
+    longitude: agentProfile.serviceLongitude,
+    source: "registered_hub" as const
+  };
+}
+
 function serializePayoutRequest(document: WithId<PayoutRequestDocument>): PayoutRequestRecord {
-  const resolvedPickupLocation = resolvePickupLocation(document.pickupArea || document.pickupLocation);
-  const pickupLatitude = document.pickupLatitude ?? resolvedPickupLocation.latitude;
-  const pickupLongitude = document.pickupLongitude ?? resolvedPickupLocation.longitude;
-  const pickupArea = resolvedPickupLocation.area;
-  const pickupLocation = resolvedPickupLocation.address;
+  const legacyDocument = document as unknown as {
+    amountUsd?: unknown;
+    platformFeeUsd?: unknown;
+    agentFeeUsd?: unknown;
+    totalUsd?: unknown;
+  };
+  const tokenAmount = roundCurrency(normalizeFiniteNumber(document.tokenAmount, normalizeFiniteNumber(legacyDocument.amountUsd, 0)));
+  const platformFeeToken = roundCurrency(
+    normalizeFiniteNumber(document.platformFeeToken, normalizeFiniteNumber(legacyDocument.platformFeeUsd, 0))
+  );
+  const agentFeeToken = roundCurrency(
+    normalizeFiniteNumber(document.agentFeeToken, normalizeFiniteNumber(legacyDocument.agentFeeUsd, 0))
+  );
+  const totalToken = roundCurrency(
+    normalizeFiniteNumber(
+      document.totalToken,
+      normalizeFiniteNumber(legacyDocument.totalUsd, tokenAmount + platformFeeToken + agentFeeToken)
+    )
+  );
+  const senderSelectedLocation = resolvePickupLocation(document.pickupArea || document.pickupLocation);
+
+  // Re-derive the agent's hub from the canonical pickup-locations list using their
+  // serviceLocationId so we always use up-to-date coordinates and area labels —
+  // the snapshot stored at assignment time may be stale if the agent re-onboarded.
+  const agentRegisteredHub =
+    document.assignedAgent?.serviceLocationId
+      ? findPickupLocation(document.assignedAgent.serviceLocationId)
+      : null;
+
+  const assignedAgentPickup =
+    document.assignedAgent &&
+    document.status !== "open" &&
+    document.status !== "cancelled" &&
+    (agentRegisteredHub ||
+      (typeof document.assignedAgent.serviceLatitude === "number" &&
+        typeof document.assignedAgent.serviceLongitude === "number" &&
+        document.assignedAgent.serviceAddress))
+      ? {
+          // Prefer the live hub label; fall back to snapshot zone
+          area: agentRegisteredHub?.area || document.assignedAgent.serviceZone || document.pickupArea || senderSelectedLocation.area,
+          // Keep the agent's stored address (includes their serviceLocationDetail like "OG HUB, near …")
+          address: document.assignedAgent.serviceAddress || agentRegisteredHub?.address || senderSelectedLocation.address,
+          // Use canonical coordinates — authoritative and always accurate
+          latitude: agentRegisteredHub?.latitude ?? (document.assignedAgent.serviceLatitude as number),
+          longitude: agentRegisteredHub?.longitude ?? (document.assignedAgent.serviceLongitude as number)
+        }
+      : null;
+  const pickupLatitude = assignedAgentPickup?.latitude ?? document.pickupLatitude ?? senderSelectedLocation.latitude;
+  const pickupLongitude = assignedAgentPickup?.longitude ?? document.pickupLongitude ?? senderSelectedLocation.longitude;
+  const pickupArea = assignedAgentPickup?.area ?? senderSelectedLocation.area;
+  const pickupLocation = assignedAgentPickup?.address ?? senderSelectedLocation.address;
+  const pickupLocationDetail = normalizeOptionalText(document.pickupLocationDetail);
+  const displayPickupArea = !assignedAgentPickup && pickupLocationDetail ? `${pickupArea} - ${pickupLocationDetail}` : pickupArea;
+  const displayPickupLocation =
+    !assignedAgentPickup && pickupLocationDetail ? `${pickupLocation} (${pickupLocationDetail})` : pickupLocation;
+  const pickupLocationForDirections = {
+    id: agentRegisteredHub?.id || (assignedAgentPickup ? document.assignedAgent?.serviceLocationId || senderSelectedLocation.id : senderSelectedLocation.id),
+    state: agentRegisteredHub?.state || senderSelectedLocation.state,
+    city: agentRegisteredHub?.city || senderSelectedLocation.city,
+    aliases: agentRegisteredHub?.aliases || senderSelectedLocation.aliases,
+    area: pickupArea,
+    address: pickupLocation,
+    latitude: pickupLatitude,
+    longitude: pickupLongitude
+  };
+  const receiverWhatsAppMessage = buildReceiverWhatsAppMessage({
+    reference: document.reference,
+    collectionCode: document.collectionCode,
+    amountNgn: document.estimatedLocalAmount,
+    pickupLocation,
+    assignedAgentName: document.assignedAgent?.name,
+    assignedAgentPhone: document.assignedAgent?.phoneNumber
+  });
+  const receiverWhatsAppPhone = document.receiverPhone.replace(/\D/g, "");
+  const receiverWhatsAppUrl = `https://wa.me/${receiverWhatsAppPhone}?text=${encodeURIComponent(receiverWhatsAppMessage)}`;
 
   return {
     id: document._id.toHexString(),
@@ -203,13 +570,14 @@ function serializePayoutRequest(document: WithId<PayoutRequestDocument>): Payout
     receiverName: document.receiverName,
     receiverPhone: document.receiverPhone,
     receiverUserId: document.receiverUserId?.toHexString() ?? null,
-    pickupArea,
-    pickupLocation,
+    pickupArea: displayPickupArea,
+    pickupLocationDetail: pickupLocationDetail || null,
+    pickupLocation: displayPickupLocation,
     pickupLatitude,
     pickupLongitude,
     pickupCoordinatesLabel: formatPickupCoordinates(pickupLatitude, pickupLongitude),
     pickupDirectionsUrl: buildPickupDirectionsUrl({
-      ...resolvedPickupLocation,
+      ...pickupLocationForDirections,
       latitude: pickupLatitude,
       longitude: pickupLongitude
     }),
@@ -217,13 +585,54 @@ function serializePayoutRequest(document: WithId<PayoutRequestDocument>): Payout
       latitude: pickupLatitude,
       longitude: pickupLongitude
     }),
+    receiverWhatsAppMessage,
+    receiverWhatsAppUrl,
     notes: document.notes,
-    amountUsd: document.amountUsd,
+    tokenType: ensureStableToken(document.tokenType),
+    tokenAmount,
+    platformFeeToken,
+    agentFeeToken,
+    totalToken,
+    conversionQuote: document.conversionQuote
+      ? {
+          provider: "bitnob",
+          status: document.conversionQuote.status,
+          quoteId: document.conversionQuote.quoteId,
+          payoutId: document.conversionQuote.payoutId ?? null,
+          reference: document.conversionQuote.reference,
+          rate: document.conversionQuote.rate,
+          settlementAmountNgn: document.conversionQuote.settlementAmountNgn,
+          amountToken: document.conversionQuote.amountToken,
+          feesToken: document.conversionQuote.feesToken,
+          failureReason: document.conversionQuote.failureReason ?? null,
+          lastEventAt: document.conversionQuote.lastEventAt?.toISOString() ?? null,
+          expiresAt: document.conversionQuote.expiresAt.toISOString(),
+          createdAt: document.conversionQuote.createdAt.toISOString()
+        }
+      : null,
+    settlement: document.settlement
+      ? {
+          provider: "paystack",
+          status: document.settlement.status,
+          recipientCode: document.settlement.recipientCode ?? null,
+          transferCode: document.settlement.transferCode ?? null,
+          transferReference: document.settlement.transferReference ?? null,
+          amountNgn: document.settlement.amountNgn,
+          currency: "NGN",
+          reason: document.settlement.reason,
+          initiatedAt: document.settlement.initiatedAt.toISOString(),
+          lastCheckedAt: document.settlement.lastCheckedAt?.toISOString() ?? null,
+          completedAt: document.settlement.completedAt?.toISOString() ?? null,
+          failedAt: document.settlement.failedAt?.toISOString() ?? null,
+          failureReason: document.settlement.failureReason ?? null
+        }
+      : null,
+    amountUsd: tokenToUsd(tokenAmount),
     estimatedLocalAmount: document.estimatedLocalAmount,
     localCurrency: document.localCurrency,
-    platformFeeUsd: document.platformFeeUsd,
-    agentFeeUsd: document.agentFeeUsd,
-    totalUsd: document.totalUsd,
+    platformFeeUsd: tokenToUsd(platformFeeToken),
+    agentFeeUsd: tokenToUsd(agentFeeToken),
+    totalUsd: tokenToUsd(totalToken),
     collectionCode: document.collectionCode,
     status: document.status,
     assignedAgent: document.assignedAgent
@@ -237,7 +646,14 @@ function serializePayoutRequest(document: WithId<PayoutRequestDocument>): Payout
           distanceKm: document.assignedAgent.distanceKm ?? null,
           distanceLabel:
             typeof document.assignedAgent.distanceKm === "number" ? formatDistanceLabel(document.assignedAgent.distanceKm) : null,
-          serviceZone: document.assignedAgent.serviceZone ?? null
+          serviceLocationId: document.assignedAgent.serviceLocationId ?? null,
+          serviceZone: document.assignedAgent.serviceZone ?? null,
+          serviceAddress: document.assignedAgent.serviceAddress ?? null,
+          serviceLatitude:
+            typeof document.assignedAgent.serviceLatitude === "number" ? document.assignedAgent.serviceLatitude : null,
+          serviceLongitude:
+            typeof document.assignedAgent.serviceLongitude === "number" ? document.assignedAgent.serviceLongitude : null,
+          locationSource: document.assignedAgent.locationSource ?? null
         }
       : null,
     completedAt: document.completedAt?.toISOString() ?? null,
@@ -319,12 +735,15 @@ async function findNearestEligibleAgent(input: {
   pickupLatitude: number;
   pickupLongitude: number;
   estimatedLocalAmount: number;
+  excludedAgentUserIds?: string[];
 }) {
   const activeAgents = await listActiveAgentUsers();
 
   if (activeAgents.length === 0) {
     return null;
   }
+
+  const excludedAgentUserIdSet = new Set((input.excludedAgentUserIds ?? []).filter(Boolean));
 
   const { activeLoadByAgentId, completedCountByAgentId } = await getAgentRequestLoadStats(
     input.collection,
@@ -334,15 +753,26 @@ async function findNearestEligibleAgent(input: {
 
   const eligibleAgents = activeAgents
     .flatMap((agentUser) => {
-      if (!agentUser.agentProfile || !agentUser.walletAddress) {
+      if (excludedAgentUserIdSet.has(agentUser.id)) {
+        return [];
+      }
+
+      if (!agentUser.agentProfile || agentUser.agentProfile.manualReviewRequired) {
+        return [];
+      }
+
+      if (input.estimatedLocalAmount > agentUser.agentProfile.maxSinglePayoutNgn) {
         return [];
       }
 
       const livePresence = livePresenceByAgentId.get(agentUser.id);
-
-      if (!livePresence) {
-        return [];
-      }
+      const referenceCoordinates = getAgentReferenceCoordinates({
+        agentUser,
+        livePresence:
+          livePresence && typeof livePresence.latitude === "number" && typeof livePresence.longitude === "number"
+            ? { latitude: livePresence.latitude, longitude: livePresence.longitude }
+            : null
+      });
 
       const activeLoadNgn = activeLoadByAgentId.get(agentUser.id) ?? 0;
       const remainingCapacityNgn = agentUser.agentProfile.dailyCapacityNgn - activeLoadNgn;
@@ -352,7 +782,7 @@ async function findNearestEligibleAgent(input: {
       }
 
       const distanceKm = calculateDistanceKm(
-        ensureLivePresenceCoordinates(livePresence.latitude, livePresence.longitude),
+        ensureCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
         {
           latitude: input.pickupLatitude,
           longitude: input.pickupLongitude
@@ -364,11 +794,16 @@ async function findNearestEligibleAgent(input: {
           agentUser,
           distanceKm,
           remainingCapacityNgn,
-          transferCount: completedCountByAgentId.get(agentUser.id) ?? 0
+          transferCount: completedCountByAgentId.get(agentUser.id) ?? 0,
+          locationSource: referenceCoordinates.source
         }
       ];
     })
     .sort((left, right) => {
+      if (left.locationSource !== right.locationSource) {
+        return left.locationSource === "live_presence" ? -1 : 1;
+      }
+
       if (left.distanceKm !== right.distanceKm) {
         return left.distanceKm - right.distanceKm;
       }
@@ -383,36 +818,139 @@ async function findNearestEligibleAgent(input: {
   return eligibleAgents[0] ?? null;
 }
 
-export async function createPayoutRequest(input: {
-  senderUser: AppUser;
-  receiverName: string;
-  receiverPhone: string;
-  pickupArea: string;
-  notes?: string;
-  amountUsd: number;
+function getRequestPickupCoordinates(document: Pick<PayoutRequestDocument, "pickupArea" | "pickupLocation" | "pickupLatitude" | "pickupLongitude">) {
+  const resolvedPickupLocation = resolvePickupLocation(document.pickupArea || document.pickupLocation);
+
+  return {
+    latitude: document.pickupLatitude ?? resolvedPickupLocation.latitude,
+    longitude: document.pickupLongitude ?? resolvedPickupLocation.longitude
+  };
+}
+
+async function autoAssignBestEligibleAgent(input: {
+  collection: Collection<PayoutRequestDocument>;
+  requestDocument: WithId<PayoutRequestDocument>;
+  excludedAgentUserIds?: string[];
 }) {
-  const collection = await getPayoutRequestsCollection();
+  const requestPickupCoordinates = getRequestPickupCoordinates(input.requestDocument);
+  const nearestEligibleAgent = await findNearestEligibleAgent({
+    collection: input.collection,
+    pickupLatitude: requestPickupCoordinates.latitude,
+    pickupLongitude: requestPickupCoordinates.longitude,
+    estimatedLocalAmount: input.requestDocument.estimatedLocalAmount,
+    excludedAgentUserIds: input.excludedAgentUserIds
+  });
   const now = new Date();
-  const receiverName = ensureRequiredText(input.receiverName, "Receiver name");
-  const receiverPhone = normalizePhoneNumber(input.receiverPhone);
+
+  if (!nearestEligibleAgent) {
+    await input.collection.updateOne(
+      { _id: input.requestDocument._id },
+      {
+        $set: {
+          status: "open",
+          updatedAt: now
+        },
+        $unset: {
+          assignedAgent: ""
+        }
+      }
+    );
+    const reopenedDocument = await input.collection.findOne({ _id: input.requestDocument._id });
+    return reopenedDocument ?? input.requestDocument;
+  }
+
+  await input.collection.updateOne(
+    { _id: input.requestDocument._id },
+    {
+      $set: {
+        status: "accepted",
+        assignedAgent: buildAssignedAgentSnapshot({
+          agentUser: nearestEligibleAgent.agentUser,
+          acceptedAt: now,
+          distanceKm: nearestEligibleAgent.distanceKm,
+          transferCount: nearestEligibleAgent.transferCount,
+          locationSource: nearestEligibleAgent.locationSource
+        }),
+        updatedAt: now
+      }
+    }
+  );
+
+  const assignedDocument = await input.collection.findOne({ _id: input.requestDocument._id });
+  return assignedDocument ?? input.requestDocument;
+}
+
+async function autoReassignAcceptedRequestIfNeeded(input: {
+  collection: Collection<PayoutRequestDocument>;
+  requestDocument: WithId<PayoutRequestDocument>;
+}) {
+  const document = input.requestDocument;
+
+  if (document.status !== "accepted" || !document.assignedAgent?.userId) {
+    return document;
+  }
+
+  const assignedAgentUserId = document.assignedAgent.userId.toHexString();
+  const assignedAgentUser = await getUserById(assignedAgentUserId);
+  const mustReassign =
+    !assignedAgentUser ||
+    !assignedAgentUser.agentProfile ||
+    assignedAgentUser.agentProfile.manualReviewRequired ||
+    !assignedAgentUser.agentProfile.isAvailable ||
+    document.estimatedLocalAmount > assignedAgentUser.agentProfile.maxSinglePayoutNgn;
+
+  if (!mustReassign) {
+    return document;
+  }
+
+  // Do NOT add the agent to the exclusion list here — they were unassigned due to
+  // profile/capacity reasons, not because they declined. Only declinePayoutRequest
+  // should permanently exclude an agent from a request.
+  const existingExcludedIds = (document.excludedAgentUserIds ?? []).map((agentId) => agentId.toHexString());
+  const now = new Date();
+
+  await input.collection.updateOne(
+    { _id: document._id },
+    {
+      $set: {
+        updatedAt: now
+      }
+    }
+  );
+
+  const updatedDocument = await input.collection.findOne({ _id: document._id });
+
+  if (!updatedDocument) {
+    return document;
+  }
+
+  return autoAssignBestEligibleAgent({
+    collection: input.collection,
+    requestDocument: updatedDocument,
+    excludedAgentUserIds: existingExcludedIds
+  });
+}
+
+export async function previewNearestEligibleAgentForPickup(input: {
+  pickupArea: string;
+  tokenAmount: number;
+  tokenType?: StableToken;
+}): Promise<NearestEligibleAgentPreview> {
+  void ensureStableToken(input.tokenType);
+  const collection = await getPayoutRequestsCollection();
   const pickupArea = ensureRequiredText(input.pickupArea, "Pickup area");
-  const notes = typeof input.notes === "string" ? input.notes.trim() : "";
-  const amountUsd = Number(input.amountUsd);
+  const tokenAmount = Number(input.tokenAmount);
   const resolvedPickupLocation = findPickupLocation(pickupArea);
 
-  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
-    throw new Error("Enter a valid payout amount.");
+  if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
+    throw new Error("Enter a valid USDT amount to preview the nearest eligible agent.");
   }
 
   if (!resolvedPickupLocation) {
-    throw new Error("Select a valid pickup area for the receiver.");
+    throw new Error("Select a valid pickup location.");
   }
 
-  const platformFeeUsd = roundCurrency(amountUsd * 0.002);
-  const agentFeeUsd = roundCurrency(Math.max(amountUsd * 0.005, 2.5));
-  const totalUsd = roundCurrency(amountUsd + platformFeeUsd + agentFeeUsd);
-  const estimatedLocalAmount = Math.round(amountUsd * LOCAL_EXCHANGE_RATE);
-  const receiverUser = await getUserByPhoneAndRole(receiverPhone, "receiver");
+  const estimatedLocalAmount = Math.round(tokenToUsd(tokenAmount) * LOCAL_EXCHANGE_RATE);
   const nearestEligibleAgent = await findNearestEligibleAgent({
     collection,
     pickupLatitude: resolvedPickupLocation.latitude,
@@ -420,8 +958,441 @@ export async function createPayoutRequest(input: {
     estimatedLocalAmount
   });
 
+  return {
+    pickupArea: resolvedPickupLocation.area,
+    pickupLocation: resolvedPickupLocation.address,
+    estimatedLocalAmount,
+    localCurrency: "NGN",
+    nearestAgent: nearestEligibleAgent
+      ? {
+          userId: nearestEligibleAgent.agentUser.id,
+          name: nearestEligibleAgent.agentUser.agentProfile?.businessName || nearestEligibleAgent.agentUser.displayName || "CashNode Agent",
+          phoneNumber: nearestEligibleAgent.agentUser.phoneNumber,
+          rating: calculateAgentRating(nearestEligibleAgent.transferCount),
+          transferCount: nearestEligibleAgent.transferCount,
+          distanceKm: roundCurrency(nearestEligibleAgent.distanceKm),
+          distanceLabel: formatDistanceLabel(nearestEligibleAgent.distanceKm),
+          serviceZone: nearestEligibleAgent.agentUser.agentProfile?.serviceZone ?? null
+        }
+      : null
+  };
+}
+
+async function refreshSettlementStateIfPending(collection: Collection<PayoutRequestDocument>, document: WithId<PayoutRequestDocument>) {
+  if (!document.settlement?.transferReference || document.settlement.status !== "transfer_pending") {
+    return document;
+  }
+
+  try {
+    const verification = await verifyPaystackTransfer(document.settlement.transferReference);
+    const nextStatus = mapPaystackStatusToSettlementStatus(verification.status);
+    const now = new Date();
+
+    if (nextStatus !== document.settlement.status) {
+      const setPayload: Record<string, unknown> = {
+        "settlement.status": nextStatus,
+        "settlement.transferCode": verification.transferCode ?? document.settlement.transferCode,
+        "settlement.lastCheckedAt": now
+      };
+
+      if (nextStatus === "transfer_success") {
+        setPayload["settlement.completedAt"] = now;
+      }
+
+      if (nextStatus === "transfer_failed") {
+        setPayload["settlement.failedAt"] = now;
+        setPayload["settlement.failureReason"] = `Paystack status: ${verification.status || "failed"}`;
+      }
+
+      await collection.updateOne(
+        { _id: document._id },
+        {
+          $set: setPayload,
+          ...(nextStatus === "transfer_success"
+            ? {
+                $unset: {
+                  "settlement.failureReason": ""
+                }
+              }
+            : {})
+        }
+      );
+
+      const refreshed = await collection.findOne({ _id: document._id });
+      return refreshed ?? document;
+    }
+
+    await collection.updateOne(
+      { _id: document._id },
+      {
+        $set: {
+          "settlement.lastCheckedAt": now
+        }
+      }
+    );
+  } catch (error) {
+    const now = new Date();
+    const failureReason = error instanceof Error ? error.message : "Failed to verify transfer status.";
+
+    await collection.updateOne(
+      { _id: document._id },
+      {
+        $set: {
+          "settlement.lastCheckedAt": now,
+          "settlement.failureReason": failureReason
+        }
+      }
+    );
+  }
+
+  const latest = await collection.findOne({ _id: document._id });
+  return latest ?? document;
+}
+
+async function refreshRequestSettlementStateOnly(collection: Collection<PayoutRequestDocument>, document: WithId<PayoutRequestDocument>) {
+  return refreshSettlementStateIfPending(collection, document);
+}
+
+async function refreshRequestRuntimeState(collection: Collection<PayoutRequestDocument>, document: WithId<PayoutRequestDocument>) {
+  const reassignedDocument = await autoReassignAcceptedRequestIfNeeded({
+    collection,
+    requestDocument: document
+  });
+
+  return refreshSettlementStateIfPending(collection, reassignedDocument);
+}
+
+async function executeAgentSettlement(input: {
+  collection: Collection<PayoutRequestDocument>;
+  requestDocument: WithId<PayoutRequestDocument>;
+  agentUser: AppUser;
+}) {
+  const { bankCode, accountNumber, accountName, recipientCode: existingRecipientCode } = ensureAgentBankSettlementProfile(input.agentUser);
+  const settlementAmountNgn = computeAgentSettlementAmountNgn({
+    tokenAmount: input.requestDocument.tokenAmount,
+    agentFeeToken: input.requestDocument.agentFeeToken,
+    conversionQuote: input.requestDocument.conversionQuote,
+    estimatedLocalAmount: input.requestDocument.estimatedLocalAmount
+  });
+  const reason = `CashNode payout ${input.requestDocument.reference}`;
+  const now = new Date();
+
+  let recipientCode = existingRecipientCode;
+
+  if (!recipientCode) {
+    const recipient = await createPaystackTransferRecipient({
+      name: accountName,
+      accountNumber,
+      bankCode,
+      description: `CashNode agent ${input.agentUser.displayName || input.agentUser.phoneNumber}`
+    });
+    recipientCode = recipient.recipientCode;
+    await updateAgentSettlementRecipientCode({
+      userId: input.agentUser.id,
+      recipientCode
+    });
+  }
+
+  await input.collection.updateOne(
+    { _id: input.requestDocument._id },
+    {
+      $set: {
+        settlement: {
+          provider: "paystack",
+          status: "recipient_created",
+          recipientCode,
+          amountNgn: settlementAmountNgn,
+          currency: "NGN",
+          reason,
+          initiatedAt: now
+        },
+        updatedAt: now
+      }
+    }
+  );
+
+  const transferReference = buildPaystackReference(input.requestDocument.reference);
+
+  try {
+    const transfer = await initiatePaystackTransfer({
+      recipientCode,
+      amountNgn: settlementAmountNgn,
+      reference: transferReference,
+      reason
+    });
+    const nextStatus = mapPaystackStatusToSettlementStatus(transfer.status);
+    const now = new Date();
+    const setPayload: Record<string, unknown> = {
+      "settlement.status": nextStatus,
+      "settlement.transferReference": transfer.reference,
+      "settlement.lastCheckedAt": now,
+      updatedAt: now
+    };
+
+    if (transfer.transferCode) {
+      setPayload["settlement.transferCode"] = transfer.transferCode;
+    }
+
+    if (nextStatus === "transfer_success") {
+      setPayload["settlement.completedAt"] = now;
+    }
+
+    if (nextStatus === "transfer_failed") {
+      setPayload["settlement.failedAt"] = now;
+      setPayload["settlement.failureReason"] = "Paystack returned a failed status.";
+    }
+
+    await input.collection.updateOne(
+      { _id: input.requestDocument._id },
+      {
+        $set: setPayload,
+        ...(nextStatus === "transfer_success"
+          ? {
+              $unset: {
+                "settlement.failureReason": ""
+              }
+            }
+          : {})
+      }
+    );
+  } catch (error) {
+    const failureReason = error instanceof Error ? error.message : "Unable to initiate Paystack transfer.";
+
+    await input.collection.updateOne(
+      { _id: input.requestDocument._id },
+      {
+        $set: {
+          "settlement.status": "transfer_failed",
+          "settlement.transferReference": transferReference,
+          "settlement.lastCheckedAt": new Date(),
+          "settlement.failedAt": new Date(),
+          "settlement.failureReason": failureReason,
+          updatedAt: new Date()
+        }
+      }
+    );
+  }
+}
+
+export async function withdrawAgentSettlements(input: { agentUser: AppUser }) {
+  const collection = await getPayoutRequestsCollection();
+  const agentObjectId = ensureObjectId(input.agentUser.id, "agent user id");
+  const eligibleRequests = await collection
+    .find({
+      status: "completed",
+      "assignedAgent.userId": agentObjectId,
+      $or: [
+        { "settlement.status": "available_for_withdrawal" },
+        { "settlement.status": "transfer_failed" }
+      ]
+    })
+    .sort({ completedAt: 1, updatedAt: 1 })
+    .toArray();
+
+  if (eligibleRequests.length === 0) {
+    throw new Error("No completed payout balance is available to withdraw.");
+  }
+
+  const { bankCode, accountNumber, accountName, recipientCode: existingRecipientCode } = ensureAgentBankSettlementProfile(input.agentUser);
+  const totalAmountNgn = eligibleRequests.reduce((sum, request) => sum + (request.settlement?.amountNgn ?? 0), 0);
+
+  if (!Number.isFinite(totalAmountNgn) || totalAmountNgn <= 0) {
+    throw new Error("No valid withdrawal amount is available.");
+  }
+
+  let recipientCode = existingRecipientCode;
+
+  if (!recipientCode) {
+    const recipient = await createPaystackTransferRecipient({
+      name: accountName,
+      accountNumber,
+      bankCode,
+      description: `CashNode agent ${input.agentUser.displayName || input.agentUser.phoneNumber}`
+    });
+    recipientCode = recipient.recipientCode;
+    await updateAgentSettlementRecipientCode({
+      userId: input.agentUser.id,
+      recipientCode
+    });
+  }
+
+  const transferReference = buildSettlementBatchReference(input.agentUser.id);
+  const reason = `CashNode agent withdrawal (${eligibleRequests.length} payouts)`;
+
+  await collection.updateMany(
+    { _id: { $in: eligibleRequests.map((request) => request._id) } },
+    {
+      $set: {
+        "settlement.status": "recipient_created",
+        "settlement.recipientCode": recipientCode,
+        "settlement.reason": reason,
+        "settlement.initiatedAt": new Date(),
+        "settlement.lastCheckedAt": new Date(),
+        updatedAt: new Date()
+      },
+      $unset: {
+        "settlement.failedAt": "",
+        "settlement.failureReason": "",
+        "settlement.completedAt": "",
+        "settlement.transferCode": "",
+        "settlement.transferReference": ""
+      }
+    }
+  );
+
+  try {
+    const transfer = await initiatePaystackTransfer({
+      recipientCode,
+      amountNgn: totalAmountNgn,
+      reference: transferReference,
+      reason
+    });
+    const nextStatus = mapPaystackStatusToSettlementStatus(transfer.status);
+    const now = new Date();
+    const setPayload: Record<string, unknown> = {
+      "settlement.status": nextStatus,
+      "settlement.transferReference": transfer.reference,
+      "settlement.lastCheckedAt": now,
+      updatedAt: now
+    };
+
+    if (transfer.transferCode) {
+      setPayload["settlement.transferCode"] = transfer.transferCode;
+    }
+
+    if (nextStatus === "transfer_success") {
+      setPayload["settlement.completedAt"] = now;
+    }
+
+    if (nextStatus === "transfer_failed") {
+      setPayload["settlement.failedAt"] = now;
+      setPayload["settlement.failureReason"] = "Paystack returned a failed status.";
+    }
+
+    await collection.updateMany(
+      { _id: { $in: eligibleRequests.map((request) => request._id) } },
+      {
+        $set: setPayload,
+        ...(nextStatus === "transfer_success"
+          ? {
+              $unset: {
+                "settlement.failedAt": "",
+                "settlement.failureReason": ""
+              }
+            }
+          : {})
+      }
+    );
+  } catch (error) {
+    const failureReason = error instanceof Error ? error.message : "Unable to run withdrawal transfer.";
+
+    if (isThirdPartyPayoutRestriction(failureReason)) {
+      const queuedAt = new Date();
+
+      await collection.updateMany(
+        { _id: { $in: eligibleRequests.map((request) => request._id) } },
+        {
+          $set: {
+            "settlement.status": "withdrawal_requested",
+            "settlement.transferReference": transferReference,
+            "settlement.lastCheckedAt": queuedAt,
+            "settlement.failureReason": "Automatic bank payout is unavailable right now. CashNode queued this withdrawal for manual processing.",
+            updatedAt: queuedAt
+          },
+          $unset: {
+            "settlement.failedAt": "",
+            "settlement.completedAt": "",
+            "settlement.transferCode": ""
+          }
+        }
+      );
+
+      const queuedRequests = await collection
+        .find({ _id: { $in: eligibleRequests.map((request) => request._id) } })
+        .sort({ completedAt: 1, updatedAt: 1 })
+        .toArray();
+
+      return queuedRequests.map(serializePayoutRequest);
+    }
+
+    await collection.updateMany(
+      { _id: { $in: eligibleRequests.map((request) => request._id) } },
+      {
+        $set: {
+          "settlement.status": "transfer_failed",
+          "settlement.transferReference": transferReference,
+          "settlement.lastCheckedAt": new Date(),
+          "settlement.failedAt": new Date(),
+          "settlement.failureReason": failureReason,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    throw error;
+  }
+
+  const refreshedRequests = await collection
+    .find({ _id: { $in: eligibleRequests.map((request) => request._id) } })
+    .sort({ completedAt: 1, updatedAt: 1 })
+    .toArray();
+
+  return refreshedRequests.map(serializePayoutRequest);
+}
+
+export async function createPayoutRequest(input: {
+  senderUser: AppUser;
+  receiverName: string;
+  receiverPhone: string;
+  pickupArea: string;
+  pickupLocationDetail?: string;
+  notes?: string;
+  tokenType?: StableToken;
+  tokenAmount: number;
+}) {
+  const collection = await getPayoutRequestsCollection();
+  const now = new Date();
+  const receiverName = ensureRequiredText(input.receiverName, "Receiver name");
+  const receiverPhone = normalizePhoneNumber(input.receiverPhone);
+  const pickupArea = ensureRequiredText(input.pickupArea, "Pickup area");
+  const pickupLocationDetail = normalizeOptionalText(input.pickupLocationDetail);
+  const notes = typeof input.notes === "string" ? input.notes.trim() : "";
+  const tokenType = ensureStableToken(input.tokenType);
+  const tokenAmount = Number(input.tokenAmount);
+  const resolvedPickupLocation = findPickupLocation(pickupArea);
+
+  if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
+    throw new Error("Enter a valid USDT payout amount.");
+  }
+
+  if (!resolvedPickupLocation) {
+    throw new Error("Select a valid pickup area for the receiver.");
+  }
+
+  const platformFeeToken = roundCurrency(tokenAmount * 0.002);
+  const agentFeeToken = roundCurrency(Math.max(tokenAmount * 0.005, 2.5));
+  const totalToken = roundCurrency(tokenAmount + platformFeeToken + agentFeeToken);
+  const quoteReference = `quote-${generateReference().toLowerCase()}`;
+  const quote = await createBitnobUsdtNgnQuote({
+    tokenAmount,
+    reference: quoteReference
+  });
+  const executedPayout = await executeBitnobUsdtNgnPayout({
+    quote,
+    requestReference: quote.reference
+  });
+  const conversionStatus = mapBitnobEventToQuoteStatus(executedPayout.status);
+
+  if (conversionStatus === "failed" || conversionStatus === "expired" || conversionStatus === "quoted") {
+    throw new Error("Bitnob conversion did not reach an executable payout state. Please retry.");
+  }
+
+  const estimatedLocalAmount = Math.round(executedPayout.settlementAmountNgn);
+  const receiverUser = await getUserByPhoneAndRole(receiverPhone, "receiver");
+  const requestReference = generateReference();
+
   const insertResult = await collection.insertOne({
-    reference: generateReference(),
+    reference: requestReference,
     senderUserId: ensureObjectId(input.senderUser.id, "sender user id"),
     senderName: input.senderUser.displayName || "CashNode Sender",
     senderPhone: input.senderUser.phoneNumber,
@@ -429,26 +1400,34 @@ export async function createPayoutRequest(input: {
     receiverPhone,
     receiverUserId: receiverUser ? ensureObjectId(receiverUser.id, "receiver user id") : undefined,
     pickupArea: resolvedPickupLocation.area,
+    pickupLocationDetail: pickupLocationDetail || undefined,
     pickupLocation: resolvedPickupLocation.address,
     pickupLatitude: resolvedPickupLocation.latitude,
     pickupLongitude: resolvedPickupLocation.longitude,
     notes,
-    amountUsd: roundCurrency(amountUsd),
+    tokenType,
+    tokenAmount: roundCurrency(tokenAmount),
     estimatedLocalAmount,
     localCurrency: "NGN",
-    platformFeeUsd,
-    agentFeeUsd,
-    totalUsd,
+    platformFeeToken,
+    agentFeeToken,
+    totalToken,
+    conversionQuote: {
+      provider: "bitnob",
+      status: conversionStatus,
+      quoteId: executedPayout.quoteId,
+      payoutId: executedPayout.payoutId,
+      reference: executedPayout.reference,
+      rate: executedPayout.rate,
+      settlementAmountNgn: executedPayout.settlementAmountNgn,
+      amountToken: roundCurrency(executedPayout.amountToken),
+      feesToken: roundCurrency(executedPayout.feesToken),
+      lastEventAt: now,
+      expiresAt: new Date(executedPayout.expiresAt),
+      createdAt: now
+    },
     collectionCode: generateCollectionCode(),
-    status: nearestEligibleAgent ? "accepted" : "open",
-    assignedAgent: nearestEligibleAgent
-      ? buildAssignedAgentSnapshot({
-          agentUser: nearestEligibleAgent.agentUser,
-          acceptedAt: now,
-          distanceKm: nearestEligibleAgent.distanceKm,
-          transferCount: nearestEligibleAgent.transferCount
-        })
-      : undefined,
+    status: "open",
     createdAt: now,
     updatedAt: now
   });
@@ -459,13 +1438,25 @@ export async function createPayoutRequest(input: {
     throw new Error("Failed to create payout request.");
   }
 
-  return serializePayoutRequest(createdDocument);
+  const assignedOrOpenDocument = await autoAssignBestEligibleAgent({
+    collection,
+    requestDocument: createdDocument
+  });
+
+  return serializePayoutRequest(assignedOrOpenDocument);
 }
 
 export async function listSenderPayoutRequests(senderUserId: string) {
   const collection = await getPayoutRequestsCollection();
   const documents = await collection.find({ senderUserId: ensureObjectId(senderUserId, "sender user id") }).sort({ updatedAt: -1 }).toArray();
-  return documents.map(serializePayoutRequest);
+  const refreshedDocuments: WithId<PayoutRequestDocument>[] = [];
+
+  for (const document of documents) {
+    const refreshedDocument = await refreshRequestSettlementStateOnly(collection, document);
+    refreshedDocuments.push(refreshedDocument);
+  }
+
+  return refreshedDocuments.map(serializePayoutRequest);
 }
 
 export async function listAvailablePayoutRequests(agentUser?: AppUser) {
@@ -476,9 +1467,10 @@ export async function listAvailablePayoutRequests(agentUser?: AppUser) {
     return documents.map(serializePayoutRequest);
   }
 
-  if (!agentUser.agentProfile || !agentUser.walletAddress) {
+  if (!agentUser.agentProfile || agentUser.agentProfile.manualReviewRequired) {
     return [];
   }
+  const agentProfile = agentUser.agentProfile;
 
   const livePresence = await getFreshOnlineAgentPresenceByUserId(agentUser.id);
   const referenceCoordinates =
@@ -488,25 +1480,30 @@ export async function listAvailablePayoutRequests(agentUser?: AppUser) {
           longitude: livePresence.longitude
         }
       : {
-          latitude: agentUser.agentProfile.serviceLatitude,
-          longitude: agentUser.agentProfile.serviceLongitude
+          latitude: agentProfile.serviceLatitude,
+          longitude: agentProfile.serviceLongitude
         };
 
   const { activeLoadByAgentId } = await getAgentRequestLoadStats(collection, [agentUser.id]);
-  const remainingCapacityNgn = agentUser.agentProfile.dailyCapacityNgn - (activeLoadByAgentId.get(agentUser.id) ?? 0);
+  const remainingCapacityNgn = agentProfile.dailyCapacityNgn - (activeLoadByAgentId.get(agentUser.id) ?? 0);
 
   return documents
-    .filter((document) => document.estimatedLocalAmount <= remainingCapacityNgn)
+    .filter(
+      (document) =>
+        !((document.excludedAgentUserIds ?? []).some((agentId) => agentId.toHexString() === agentUser.id)) &&
+        document.estimatedLocalAmount <= remainingCapacityNgn &&
+        document.estimatedLocalAmount <= agentProfile.maxSinglePayoutNgn
+    )
     .sort((left, right) => {
       const leftDistance = calculateDistanceKm(
-        ensureLivePresenceCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
+        ensureCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
         {
           latitude: left.pickupLatitude ?? resolvePickupLocation(left.pickupArea || left.pickupLocation).latitude,
           longitude: left.pickupLongitude ?? resolvePickupLocation(left.pickupArea || left.pickupLocation).longitude
         }
       );
       const rightDistance = calculateDistanceKm(
-        ensureLivePresenceCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
+        ensureCoordinates(referenceCoordinates.latitude, referenceCoordinates.longitude),
         {
           latitude: right.pickupLatitude ?? resolvePickupLocation(right.pickupArea || right.pickupLocation).latitude,
           longitude: right.pickupLongitude ?? resolvePickupLocation(right.pickupArea || right.pickupLocation).longitude
@@ -528,19 +1525,42 @@ export async function listAssignedAgentPayoutRequests(agentUserId: string) {
     .sort({ updatedAt: -1 })
     .toArray();
 
-  return documents.map(serializePayoutRequest);
+  const refreshedDocuments: WithId<PayoutRequestDocument>[] = [];
+
+  for (const document of documents) {
+    const refreshed = await refreshRequestSettlementStateOnly(collection, document);
+
+    if (refreshed.assignedAgent?.userId?.toHexString() === agentUserId) {
+      refreshedDocuments.push(refreshed);
+    }
+  }
+
+  return refreshedDocuments.map(serializePayoutRequest);
 }
 
 export async function listReceiverPayoutRequests(receiverPhone: string) {
   const collection = await getPayoutRequestsCollection();
   const documents = await collection.find({ receiverPhone }).sort({ updatedAt: -1 }).toArray();
-  return documents.map(serializePayoutRequest);
+  const refreshedDocuments: WithId<PayoutRequestDocument>[] = [];
+
+  for (const document of documents) {
+    const refreshedDocument = await refreshRequestRuntimeState(collection, document);
+    refreshedDocuments.push(refreshedDocument);
+  }
+
+  return refreshedDocuments.map(serializePayoutRequest);
 }
 
 export async function getPayoutRequestById(requestId: string) {
   const collection = await getPayoutRequestsCollection();
   const document = await collection.findOne({ _id: ensureObjectId(requestId, "request id") });
-  return document ? serializePayoutRequest(document) : null;
+
+  if (!document) {
+    return null;
+  }
+
+  const refreshedDocument = await refreshRequestRuntimeState(collection, document);
+  return serializePayoutRequest(refreshedDocument);
 }
 
 export async function getPayoutRequestByIdForUser(requestId: string, user: AppUser) {
@@ -551,16 +1571,17 @@ export async function getPayoutRequestByIdForUser(requestId: string, user: AppUs
     return null;
   }
 
-  const isSender = document.senderUserId.toHexString() === user.id;
-  const isReceiverByPhone = document.receiverPhone === user.phoneNumber;
-  const isAssignedAgent = document.assignedAgent?.userId.toHexString() === user.id;
-  const canViewOpenAgentRequest = Boolean(user.agentProfile && user.walletAddress && document.status === "open");
+  const refreshedDocument = await refreshRequestSettlementStateOnly(collection, document);
+  const isSender = refreshedDocument.senderUserId.toHexString() === user.id;
+  const isReceiverByPhone = refreshedDocument.receiverPhone === user.phoneNumber;
+  const isAssignedAgent = refreshedDocument.assignedAgent?.userId.toHexString() === user.id;
+  const canViewOpenAgentRequest = Boolean(user.agentProfile && refreshedDocument.status === "open");
 
   if (!isSender && !isReceiverByPhone && !isAssignedAgent && !canViewOpenAgentRequest) {
     throw new Error("You do not have access to this request.");
   }
 
-  return serializePayoutRequest(document);
+  return serializePayoutRequest(refreshedDocument);
 }
 
 export async function getLatestRelevantPayoutRequest(user: AppUser) {
@@ -570,7 +1591,7 @@ export async function getLatestRelevantPayoutRequest(user: AppUser) {
       { senderUserId: ensureObjectId(user.id, "sender user id") },
       { receiverPhone: user.phoneNumber },
       { "assignedAgent.userId": ensureObjectId(user.id, "agent user id") },
-      ...(user.agentProfile && user.walletAddress ? [{ status: "open" as const }] : [])
+      ...(user.agentProfile ? [{ status: "open" as const }] : [])
     ]
   };
 
@@ -582,7 +1603,12 @@ export async function getLatestRelevantPayoutRequest(user: AppUser) {
     .limit(1)
     .next();
 
-  return document ? serializePayoutRequest(document) : null;
+  if (!document) {
+    return null;
+  }
+
+  const refreshedDocument = await refreshRequestSettlementStateOnly(collection, document);
+  return serializePayoutRequest(refreshedDocument);
 }
 
 export async function acceptPayoutRequest(input: { requestId: string; agentUser: AppUser }) {
@@ -595,18 +1621,27 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
   }
 
   ensureStatusTransition(document.status, "open");
-  const agentProfile = ensureAgentDispatchProfile(input.agentUser);
+  const excludedAgentUserIds = new Set((document.excludedAgentUserIds ?? []).map((agentId) => agentId.toHexString()));
+
+  if (excludedAgentUserIds.has(input.agentUser.id)) {
+    throw new Error("This request cannot be reassigned to this agent right now.");
+  }
+
+  const agentProfile = ensureAgentOperationalEligibility({
+    agentUser: input.agentUser,
+    requestAmountNgn: document.estimatedLocalAmount
+  });
   const livePresence = await getFreshOnlineAgentPresenceByUserId(input.agentUser.id);
-  const dispatchCoordinates =
-    livePresence && typeof livePresence.latitude === "number" && typeof livePresence.longitude === "number"
-      ? {
-          latitude: livePresence.latitude,
-          longitude: livePresence.longitude
-        }
-      : {
-          latitude: agentProfile.serviceLatitude,
-          longitude: agentProfile.serviceLongitude
-        };
+  const dispatchReference = getAgentReferenceCoordinates({
+    agentUser: input.agentUser,
+    livePresence:
+      livePresence && typeof livePresence.latitude === "number" && typeof livePresence.longitude === "number"
+        ? {
+            latitude: livePresence.latitude,
+            longitude: livePresence.longitude
+          }
+        : null
+  });
 
   const { activeLoadByAgentId, completedCountByAgentId } = await getAgentRequestLoadStats(collection, [input.agentUser.id]);
   const currentActiveLoad = activeLoadByAgentId.get(input.agentUser.id) ?? 0;
@@ -617,7 +1652,7 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
 
   const resolvedPickupLocation = resolvePickupLocation(document.pickupArea || document.pickupLocation);
   const distanceKm = calculateDistanceKm(
-    ensureLivePresenceCoordinates(dispatchCoordinates.latitude, dispatchCoordinates.longitude),
+    ensureCoordinates(dispatchReference.latitude, dispatchReference.longitude),
     {
       latitude: document.pickupLatitude ?? resolvedPickupLocation.latitude,
       longitude: document.pickupLongitude ?? resolvedPickupLocation.longitude
@@ -634,7 +1669,8 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
           agentUser: input.agentUser,
           acceptedAt: now,
           distanceKm,
-          transferCount: completedCountByAgentId.get(input.agentUser.id) ?? 0
+          transferCount: completedCountByAgentId.get(input.agentUser.id) ?? 0,
+          locationSource: dispatchReference.source
         }),
         updatedAt: now
       }
@@ -650,6 +1686,56 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
   return serializePayoutRequest(updatedDocument);
 }
 
+export async function declinePayoutRequest(input: { requestId: string; agentUser: AppUser }) {
+  const collection = await getPayoutRequestsCollection();
+  const _id = ensureObjectId(input.requestId, "request id");
+  const document = await collection.findOne({ _id });
+
+  if (!document) {
+    throw new Error("Payout request not found.");
+  }
+
+  ensureStatusTransition(document.status, "accepted");
+
+  if (!document.assignedAgent?.userId || document.assignedAgent.userId.toHexString() !== input.agentUser.id) {
+    throw new Error("Only the currently assigned agent can decline this request.");
+  }
+
+  const excludedAgentUserIds = new Set([
+    ...(document.excludedAgentUserIds ?? []).map((agentId) => agentId.toHexString()),
+    input.agentUser.id
+  ]);
+  const now = new Date();
+
+  await collection.updateOne(
+    { _id, status: "accepted" },
+    {
+      $set: {
+        excludedAgentUserIds: Array.from(excludedAgentUserIds).map((agentUserId) => ensureObjectId(agentUserId, "agent user id")),
+        status: "open",
+        updatedAt: now
+      },
+      $unset: {
+        assignedAgent: ""
+      }
+    }
+  );
+
+  const reopenedDocument = await collection.findOne({ _id });
+
+  if (!reopenedDocument) {
+    throw new Error("Failed to reopen payout request after decline.");
+  }
+
+  const reassignedDocument = await autoAssignBestEligibleAgent({
+    collection,
+    requestDocument: reopenedDocument,
+    excludedAgentUserIds: Array.from(excludedAgentUserIds)
+  });
+
+  return serializePayoutRequest(reassignedDocument);
+}
+
 export async function completePayoutRequest(input: { requestId: string; actorUser: AppUser }) {
   const collection = await getPayoutRequestsCollection();
   const _id = ensureObjectId(input.requestId, "request id");
@@ -661,8 +1747,7 @@ export async function completePayoutRequest(input: { requestId: string; actorUse
 
   ensureStatusTransition(document.status, "accepted");
 
-  const isAssignedAgent =
-    input.actorUser.role === "agent" && document.assignedAgent?.userId.toHexString() === input.actorUser.id;
+  const isAssignedAgent = document.assignedAgent?.userId.toHexString() === input.actorUser.id;
   const isSender = document.senderUserId.toHexString() === input.actorUser.id;
   const isReceiverByPhone = document.receiverPhone === input.actorUser.phoneNumber;
 
@@ -683,13 +1768,262 @@ export async function completePayoutRequest(input: { requestId: string; actorUse
     }
   );
 
-  const updatedDocument = await collection.findOne({ _id });
+  let updatedDocument = await collection.findOne({ _id });
 
   if (!updatedDocument) {
     throw new Error("Failed to complete payout request.");
   }
 
+  if (updatedDocument.assignedAgent?.userId) {
+    const availableWithdrawalAmount = computeAgentSettlementAmountNgn({
+      tokenAmount: updatedDocument.tokenAmount,
+      agentFeeToken: updatedDocument.agentFeeToken,
+      conversionQuote: updatedDocument.conversionQuote,
+      estimatedLocalAmount: updatedDocument.estimatedLocalAmount
+    });
+
+    await collection.updateOne(
+      { _id },
+      {
+        $set: {
+          settlement: {
+            provider: "paystack",
+            status: "available_for_withdrawal",
+            amountNgn: availableWithdrawalAmount,
+            currency: "NGN",
+            reason: `CashNode payout ${updatedDocument.reference}`,
+            initiatedAt: new Date()
+          },
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    const settledDocument = await collection.findOne({ _id });
+
+    if (settledDocument) {
+      updatedDocument = settledDocument;
+    }
+  }
+
   return serializePayoutRequest(updatedDocument);
+}
+
+function pickFirstString(values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function extractPaystackTransferFields(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      eventName: "",
+      reference: "",
+      transferCode: "",
+      rawStatus: ""
+    };
+  }
+
+  const eventRecord = payload as Record<string, unknown>;
+  const dataRecord = eventRecord.data && typeof eventRecord.data === "object" ? (eventRecord.data as Record<string, unknown>) : {};
+
+  return {
+    eventName: pickFirstString([eventRecord.event]),
+    reference: pickFirstString([dataRecord.reference, dataRecord.transfer_reference, eventRecord.reference]),
+    transferCode: pickFirstString([dataRecord.transfer_code, dataRecord.transferCode]),
+    rawStatus: pickFirstString([dataRecord.status])
+  };
+}
+
+export async function applyPaystackTransferWebhook(payload: unknown) {
+  const collection = await getPayoutRequestsCollection();
+  const fields = extractPaystackTransferFields(payload);
+  const normalizedEvent = fields.eventName.toLowerCase();
+  const statusHint = fields.rawStatus.toLowerCase();
+  const derivedStatus = mapPaystackStatusToSettlementStatus(
+    statusHint ||
+      (normalizedEvent.includes("success")
+        ? "success"
+        : normalizedEvent.includes("failed")
+          ? "failed"
+          : normalizedEvent.includes("reversed")
+            ? "reversed"
+            : "pending")
+  );
+
+  if (!fields.reference) {
+    return {
+      matchedRequest: false,
+      reason: "Missing transfer reference in webhook payload."
+    };
+  }
+
+  const requestDocument = await collection.findOne({
+    "settlement.transferReference": fields.reference
+  });
+
+  if (!requestDocument) {
+    return {
+      matchedRequest: false,
+      reason: "No payout request found for transfer reference.",
+      transferReference: fields.reference
+    };
+  }
+
+  const now = new Date();
+  const setPayload: Record<string, unknown> = {
+    "settlement.status": derivedStatus,
+    "settlement.transferReference": fields.reference,
+    "settlement.lastCheckedAt": now,
+    updatedAt: now
+  };
+
+  if (fields.transferCode) {
+    setPayload["settlement.transferCode"] = fields.transferCode;
+  }
+
+  if (derivedStatus === "transfer_success") {
+    setPayload["settlement.completedAt"] = now;
+  }
+
+  if (derivedStatus === "transfer_failed") {
+    setPayload["settlement.failedAt"] = now;
+    setPayload["settlement.failureReason"] = `Paystack event ${fields.eventName || "transfer.failed"}`;
+  }
+
+  await collection.updateOne(
+    { _id: requestDocument._id },
+    {
+      $set: setPayload,
+      ...(derivedStatus === "transfer_success"
+        ? {
+            $unset: {
+              "settlement.failureReason": ""
+            }
+          }
+        : {})
+    }
+  );
+
+  return {
+    matchedRequest: true,
+    requestId: requestDocument._id.toHexString(),
+    transferReference: fields.reference,
+    settlementStatus: derivedStatus
+  };
+}
+
+function extractBitnobPayoutFields(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      eventName: "",
+      externalId: "",
+      quoteId: "",
+      payoutId: "",
+      reference: "",
+      failureReason: ""
+    };
+  }
+
+  const eventRecord = payload as Record<string, unknown>;
+  const dataRecord = eventRecord.data && typeof eventRecord.data === "object" ? (eventRecord.data as Record<string, unknown>) : {};
+  const quoteRecord = dataRecord.quote && typeof dataRecord.quote === "object" ? (dataRecord.quote as Record<string, unknown>) : {};
+
+  return {
+    eventName: pickFirstString([eventRecord.event, dataRecord.event]),
+    externalId: pickFirstString([eventRecord.id, dataRecord.id]),
+    quoteId: pickFirstString([dataRecord.quoteId, dataRecord.quote_id, quoteRecord.id]),
+    payoutId: pickFirstString([dataRecord.payoutId, dataRecord.payout_id, dataRecord.id]),
+    reference: pickFirstString([dataRecord.reference, quoteRecord.reference, eventRecord.reference]),
+    failureReason: pickFirstString([dataRecord.failure_reason, dataRecord.reason, eventRecord.reason])
+  };
+}
+
+export async function applyBitnobPayoutWebhook(payload: unknown) {
+  const collection = await getPayoutRequestsCollection();
+  const fields = extractBitnobPayoutFields(payload);
+  const nextQuoteStatus = mapBitnobEventToQuoteStatus(fields.eventName);
+
+  const queryCandidates: Record<string, string>[] = [];
+
+  if (fields.quoteId) {
+    queryCandidates.push({ "conversionQuote.quoteId": fields.quoteId });
+  }
+
+  if (fields.payoutId) {
+    queryCandidates.push({ "conversionQuote.payoutId": fields.payoutId });
+  }
+
+  if (fields.reference) {
+    queryCandidates.push({ "conversionQuote.reference": fields.reference });
+  }
+
+  if (queryCandidates.length === 0) {
+    return {
+      matchedRequest: false,
+      reason: "Missing Bitnob reference identifiers in webhook payload."
+    };
+  }
+
+  const requestDocument = await collection.findOne({
+    $or: queryCandidates
+  });
+
+  if (!requestDocument) {
+    return {
+      matchedRequest: false,
+      reason: "No payout request found for Bitnob identifiers."
+    };
+  }
+
+  const now = new Date();
+  const setPayload: Record<string, unknown> = {
+    "conversionQuote.status": nextQuoteStatus,
+    "conversionQuote.lastEventAt": now,
+    updatedAt: now
+  };
+
+  if (fields.quoteId) {
+    setPayload["conversionQuote.quoteId"] = fields.quoteId;
+  }
+
+  if (fields.payoutId) {
+    setPayload["conversionQuote.payoutId"] = fields.payoutId;
+  }
+
+  if (fields.reference) {
+    setPayload["conversionQuote.reference"] = fields.reference;
+  }
+
+  if (nextQuoteStatus === "failed" || nextQuoteStatus === "expired") {
+    setPayload["conversionQuote.failureReason"] = fields.failureReason || `Bitnob event ${fields.eventName}`;
+  }
+
+  await collection.updateOne(
+    { _id: requestDocument._id },
+    {
+      $set: setPayload,
+      ...(nextQuoteStatus === "success" || nextQuoteStatus === "processing" || nextQuoteStatus === "initialized"
+        ? {
+            $unset: {
+              "conversionQuote.failureReason": ""
+            }
+          }
+        : {})
+    }
+  );
+
+  return {
+    matchedRequest: true,
+    requestId: requestDocument._id.toHexString(),
+    quoteStatus: nextQuoteStatus,
+    eventName: fields.eventName
+  };
 }
 
 export async function cancelPayoutRequest(input: { requestId: string; senderUser: AppUser }) {

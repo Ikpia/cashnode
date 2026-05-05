@@ -182,16 +182,10 @@ export default function LandingPage() {
 
             <div className="mt-8 flex flex-col justify-center gap-4 sm:flex-row md:mt-10">
               <Link
-                href="/onboarding/sender"
+                href="/auth"
                 className="rounded-xl bg-white px-8 py-4 text-center text-sm font-semibold text-[#083724] shadow-md transition-transform hover:-translate-y-0.5"
               >
-                Start Sender Onboarding
-              </Link>
-              <Link
-                href="/onboarding/agent"
-                className="rounded-xl border border-white/16 bg-white/10 px-8 py-4 text-center text-sm font-semibold text-white backdrop-blur-md transition-colors hover:bg-white/16"
-              >
-                Become an Agent
+                Create your account
               </Link>
             </div>
           </div>
@@ -343,16 +337,10 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col justify-center gap-4 sm:flex-row">
             <Link
-              href="/onboarding/sender"
+              href="/auth"
               className="rounded-2xl bg-white px-10 py-4 text-sm font-semibold text-primary shadow-md transition-transform hover:-translate-y-0.5"
             >
-              Start Sender Onboarding
-            </Link>
-            <Link
-              href="/onboarding/agent"
-              className="rounded-2xl border border-white/25 bg-primary-container px-10 py-4 text-sm font-semibold text-white transition-colors hover:bg-[#0a9b6e]"
-            >
-              Register as Agent
+              Create your account
             </Link>
           </div>
         </div>

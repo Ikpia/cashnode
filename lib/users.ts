@@ -13,14 +13,21 @@ type AgentProfileDocument = {
   businessType: AgentBusinessType;
   ownerName: string;
   serviceLocationId: string;
+  serviceLocationDetail?: string;
   serviceZone: string;
   serviceAddress: string;
   serviceLatitude: number;
   serviceLongitude: number;
   dailyCapacityNgn: number;
+  maxSinglePayoutNgn: number;
+  manualReviewRequired: boolean;
   settlementRail: AgentSettlementRail;
-  stakeAmountUsd: number;
-  lockPeriod: AgentLockPeriod;
+  settlementBankCode?: string;
+  settlementAccountNumber?: string;
+  settlementAccountName?: string;
+  paystackRecipientCode?: string;
+  stakeAmountUsd?: number;
+  lockPeriod?: AgentLockPeriod;
   isAvailable: boolean;
   activatedAt: Date;
 };
@@ -30,9 +37,16 @@ export type AgentProfileInput = {
   businessType?: AgentBusinessType;
   ownerName?: string;
   serviceLocationId?: string;
+  serviceLocationDetail?: string;
   serviceZone?: string;
   dailyCapacityNgn?: number | string;
+  maxSinglePayoutNgn?: number | string;
+  manualReviewRequired?: boolean;
   settlementRail?: AgentSettlementRail;
+  settlementBankCode?: string;
+  settlementAccountNumber?: string;
+  settlementAccountName?: string;
+  paystackRecipientCode?: string | null;
   stakeAmountUsd?: number | string;
   lockPeriod?: AgentLockPeriod;
   isAvailable?: boolean;
@@ -56,14 +70,21 @@ export type AppAgentProfile = {
   businessType: AgentBusinessType;
   ownerName: string;
   serviceLocationId: string;
+  serviceLocationDetail: string | null;
   serviceZone: string;
   serviceAddress: string;
   serviceLatitude: number;
   serviceLongitude: number;
   dailyCapacityNgn: number;
+  maxSinglePayoutNgn: number;
+  manualReviewRequired: boolean;
   settlementRail: AgentSettlementRail;
-  stakeAmountUsd: number;
-  lockPeriod: AgentLockPeriod;
+  settlementBankCode: string | null;
+  settlementAccountNumber: string | null;
+  settlementAccountName: string | null;
+  paystackRecipientCode: string | null;
+  stakeAmountUsd: number | null;
+  lockPeriod: AgentLockPeriod | null;
   isAvailable: boolean;
   activatedAt: string;
 };
@@ -121,14 +142,21 @@ function toAppAgentProfile(agentProfile?: AgentProfileDocument): AppAgentProfile
     businessType: agentProfile.businessType,
     ownerName: agentProfile.ownerName,
     serviceLocationId: agentProfile.serviceLocationId,
+    serviceLocationDetail: agentProfile.serviceLocationDetail ?? null,
     serviceZone: agentProfile.serviceZone,
     serviceAddress: agentProfile.serviceAddress,
     serviceLatitude: agentProfile.serviceLatitude,
     serviceLongitude: agentProfile.serviceLongitude,
     dailyCapacityNgn: agentProfile.dailyCapacityNgn,
+    maxSinglePayoutNgn: agentProfile.maxSinglePayoutNgn ?? agentProfile.dailyCapacityNgn,
+    manualReviewRequired: agentProfile.manualReviewRequired === true,
     settlementRail: agentProfile.settlementRail,
-    stakeAmountUsd: agentProfile.stakeAmountUsd,
-    lockPeriod: agentProfile.lockPeriod,
+    settlementBankCode: agentProfile.settlementBankCode ?? null,
+    settlementAccountNumber: agentProfile.settlementAccountNumber ?? null,
+    settlementAccountName: agentProfile.settlementAccountName ?? null,
+    paystackRecipientCode: agentProfile.paystackRecipientCode ?? null,
+    stakeAmountUsd: typeof agentProfile.stakeAmountUsd === "number" ? agentProfile.stakeAmountUsd : null,
+    lockPeriod: agentProfile.lockPeriod ?? null,
     isAvailable: agentProfile.isAvailable,
     activatedAt: agentProfile.activatedAt.toISOString()
   };
@@ -218,18 +246,88 @@ function normalizeCurrencyAmount(value: unknown, label: string) {
   return Math.round(parsedValue * 100) / 100;
 }
 
+function normalizeOptionalText(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim();
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  return fallback;
+}
+
+function normalizeBankCode(value: unknown) {
+  const normalizedValue = normalizeOptionalText(value).replace(/\s+/g, "");
+
+  if (!normalizedValue) {
+    return "";
+  }
+
+  if (!/^[0-9A-Za-z]{2,10}$/.test(normalizedValue)) {
+    throw new Error("Settlement bank code is invalid.");
+  }
+
+  return normalizedValue;
+}
+
+function normalizeAccountNumber(value: unknown) {
+  const normalizedValue = normalizeOptionalText(value).replace(/\s+/g, "");
+
+  if (!normalizedValue) {
+    return "";
+  }
+
+  if (!/^\d{6,16}$/.test(normalizedValue)) {
+    throw new Error("Settlement account number must be 6-16 digits.");
+  }
+
+  return normalizedValue;
+}
+
 function buildAgentProfile(input: AgentProfileInput, existingProfile?: AgentProfileDocument): AgentProfileDocument {
   const businessName = ensureRequiredText(input.businessName, "Business name");
   const ownerName = ensureRequiredText(input.ownerName, "Owner name");
   const businessType = ensureAgentBusinessType(input.businessType);
-  const settlementRail = ensureAgentSettlementRail(input.settlementRail);
-  const stakeAmountUsd = normalizeCurrencyAmount(input.stakeAmountUsd, "Stake amount");
+  const settlementRail = input.settlementRail
+    ? ensureAgentSettlementRail(input.settlementRail)
+    : existingProfile?.settlementRail ?? "Bank account";
+  const settlementBankCode = normalizeBankCode(input.settlementBankCode ?? existingProfile?.settlementBankCode ?? "");
+  const settlementAccountNumber = normalizeAccountNumber(
+    input.settlementAccountNumber ?? existingProfile?.settlementAccountNumber ?? ""
+  );
+  const settlementAccountName = normalizeOptionalText(input.settlementAccountName ?? existingProfile?.settlementAccountName ?? "");
+  const paystackRecipientCode = normalizeOptionalText(input.paystackRecipientCode ?? existingProfile?.paystackRecipientCode ?? "");
+  const serviceLocationDetail = normalizeOptionalText(input.serviceLocationDetail ?? existingProfile?.serviceLocationDetail ?? "");
   const dailyCapacityNgn = Math.round(normalizeCurrencyAmount(input.dailyCapacityNgn, "Daily cash capacity"));
-  const lockPeriod = ensureAgentLockPeriod(input.lockPeriod);
+  const maxSinglePayoutNgn = Math.round(
+    normalizeCurrencyAmount(input.maxSinglePayoutNgn ?? existingProfile?.maxSinglePayoutNgn ?? dailyCapacityNgn, "Max single payout")
+  );
+  const manualReviewRequired = normalizeBoolean(input.manualReviewRequired, existingProfile?.manualReviewRequired ?? false);
+  const stakeAmountUsd =
+    input.stakeAmountUsd !== undefined
+      ? normalizeCurrencyAmount(input.stakeAmountUsd, "Stake amount")
+      : existingProfile?.stakeAmountUsd;
+  const lockPeriod = input.lockPeriod
+    ? ensureAgentLockPeriod(input.lockPeriod)
+    : existingProfile?.lockPeriod;
   const serviceLocation = findPickupLocation(input.serviceLocationId ?? input.serviceZone ?? "");
 
   if (!serviceLocation) {
     throw new Error("Select a valid primary pickup hub for this agent.");
+  }
+
+  if (maxSinglePayoutNgn > dailyCapacityNgn) {
+    throw new Error("Max single payout cannot be above daily cash capacity.");
+  }
+
+  if (!settlementBankCode || !settlementAccountNumber || !settlementAccountName) {
+    throw new Error("Settlement bank code, account number, and account name are required.");
   }
 
   return {
@@ -237,12 +335,19 @@ function buildAgentProfile(input: AgentProfileInput, existingProfile?: AgentProf
     ownerName,
     businessType,
     serviceLocationId: serviceLocation.id,
+    serviceLocationDetail: serviceLocationDetail || undefined,
     serviceZone: serviceLocation.area,
-    serviceAddress: serviceLocation.address,
+    serviceAddress: serviceLocationDetail ? `${serviceLocationDetail}, near ${serviceLocation.address}` : serviceLocation.address,
     serviceLatitude: serviceLocation.latitude,
     serviceLongitude: serviceLocation.longitude,
     dailyCapacityNgn,
+    maxSinglePayoutNgn,
+    manualReviewRequired,
     settlementRail,
+    settlementBankCode: settlementBankCode || undefined,
+    settlementAccountNumber: settlementAccountNumber || undefined,
+    settlementAccountName: settlementAccountName || undefined,
+    paystackRecipientCode: paystackRecipientCode || undefined,
     stakeAmountUsd,
     lockPeriod,
     isAvailable: input.isAvailable !== false,
@@ -272,8 +377,8 @@ export async function listActiveAgentUsers() {
   const collection = await getUsersCollection();
   const documents = await collection
     .find({
-      role: "agent",
       onboardingStatus: "active",
+      agentProfile: { $exists: true, $ne: null },
       "agentProfile.isAvailable": true
     })
     .sort({ updatedAt: -1 })
@@ -390,4 +495,28 @@ export async function updateUserProfile(input: {
   }
 
   return toAppUser(updatedDocument);
+}
+
+export async function updateAgentSettlementRecipientCode(input: { userId: string; recipientCode: string }) {
+  const collection = await getUsersCollection();
+  const _id = ensureObjectId(input.userId);
+  const user = await collection.findOne({ _id });
+
+  if (!user) {
+    throw new Error("User record not found.");
+  }
+
+  if (!user.agentProfile) {
+    throw new Error("Agent profile not found.");
+  }
+
+  await collection.updateOne(
+    { _id },
+    {
+      $set: {
+        "agentProfile.paystackRecipientCode": input.recipientCode.trim(),
+        updatedAt: new Date()
+      }
+    }
+  );
 }

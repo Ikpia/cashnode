@@ -8,17 +8,21 @@ import { requireUserRole } from "@/lib/auth-session";
 import {
   acceptPayoutRequest,
   completePayoutRequest,
+  declinePayoutRequest,
   listAssignedAgentPayoutRequests,
   listAvailablePayoutRequests,
-  type PayoutRequestRecord
+  withdrawAgentSettlements,
+  type PayoutRequestRecord,
+  type SettlementStatus
 } from "@/lib/payout-requests";
 import { getWelcomeGreeting } from "@/lib/user-greeting";
 
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD"
-  }).format(value);
+function formatUsdt(value: number) {
+  return `${value.toFixed(2)} USDT`;
+}
+
+function formatNgn(value: number) {
+  return `NGN ${value.toLocaleString("en-NG")}`;
 }
 
 function formatDate(value: string) {
@@ -41,7 +45,33 @@ function statusMeta(status: PayoutRequestRecord["status"]) {
   }
 }
 
-export default async function AgentDashboardPage() {
+function settlementMeta(status: SettlementStatus | null | undefined) {
+  switch (status) {
+    case "available_for_withdrawal":
+      return { label: "Ready to withdraw", className: "status-pending" };
+    case "withdrawal_requested":
+      return { label: "Queued for payout", className: "status-live" };
+    case "transfer_success":
+      return { label: "Settlement paid", className: "status-success" };
+    case "transfer_failed":
+      return { label: "Settlement failed", className: "status-pending !text-[#b42318] !bg-[#fdeaea]" };
+    case "transfer_pending":
+      return { label: "Settlement pending", className: "status-live" };
+    case "recipient_created":
+      return { label: "Preparing payout", className: "status-live" };
+    default:
+      return { label: "Not started", className: "status-pending" };
+  }
+}
+
+export default async function AgentDashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ error?: string; success?: string }>;
+}) {
+  const resolvedSearchParams = (await searchParams) ?? {};
+  const actionError = resolvedSearchParams.error;
+  const actionSuccess = resolvedSearchParams.success;
   const user = await requireUserRole("agent");
   const [availableRequests, assignedRequests] = await Promise.all([
     listAvailablePayoutRequests(user),
@@ -50,9 +80,24 @@ export default async function AgentDashboardPage() {
 
   const activeAssignments = assignedRequests.filter((request) => request.status === "accepted");
   const completedAssignments = assignedRequests.filter((request) => request.status === "completed");
-  const earnings = completedAssignments.reduce((sum, request) => sum + request.agentFeeUsd, 0);
+  const withdrawableRequests = completedAssignments.filter(
+    (request) => request.settlement?.status === "available_for_withdrawal" || request.settlement?.status === "transfer_failed"
+  );
+  const processingWithdrawalRequests = completedAssignments.filter(
+    (request) =>
+      request.settlement?.status === "withdrawal_requested" ||
+      request.settlement?.status === "recipient_created" ||
+      request.settlement?.status === "transfer_pending"
+  );
+  const withdrawableAmountNgn = withdrawableRequests.reduce((sum, request) => sum + (request.settlement?.amountNgn ?? 0), 0);
+  const processingAmountNgn = processingWithdrawalRequests.reduce((sum, request) => sum + (request.settlement?.amountNgn ?? 0), 0);
+  const settledCount = completedAssignments.filter((request) => request.settlement?.status === "transfer_success").length;
+  const earnings = completedAssignments.reduce((sum, request) => sum + request.agentFeeToken, 0);
   const averageSpeedMinutes = activeAssignments.length > 0 ? 12 : 0;
   const welcomeGreeting = getWelcomeGreeting(user, "Welcome back.");
+  const settlementDestination = user.agentProfile?.settlementAccountNumber
+    ? `${user.agentProfile.settlementAccountName ?? "Settlement account"} · ${user.agentProfile.settlementAccountNumber}`
+    : "Complete agent onboarding to add a settlement account.";
 
   async function acceptRequestAction(formData: FormData) {
     "use server";
@@ -88,6 +133,47 @@ export default async function AgentDashboardPage() {
     redirect(`/request-detail?id=${request.id}`);
   }
 
+  async function declineRequestAction(formData: FormData) {
+    "use server";
+
+    const agent = await requireUserRole("agent");
+    const request = await declinePayoutRequest({
+      requestId: String(formData.get("requestId") ?? ""),
+      agentUser: agent
+    });
+
+    revalidatePath("/agent-dashboard");
+    revalidatePath("/sender-dashboard");
+    revalidatePath("/receiver-portal");
+    revalidatePath("/request-detail");
+    revalidatePath("/payout-confirmation");
+    redirect(`/request-detail?id=${request.id}`);
+  }
+
+  async function withdrawAction() {
+    "use server";
+
+    const agent = await requireUserRole("agent");
+    try {
+      const withdrawnRequests = await withdrawAgentSettlements({ agentUser: agent });
+      const queuedManually = withdrawnRequests.some((request) => request.settlement?.status === "withdrawal_requested");
+
+      revalidatePath("/agent-dashboard");
+      revalidatePath("/request-detail");
+      revalidatePath("/payout-confirmation");
+      redirect(
+        `/agent-dashboard?success=${encodeURIComponent(
+          queuedManually
+            ? `Withdrawal request queued for manual processing for ${withdrawnRequests.length} payout${withdrawnRequests.length === 1 ? "" : "s"}.`
+            : `Withdrawal submitted for ${withdrawnRequests.length} payout${withdrawnRequests.length === 1 ? "" : "s"}.`
+        )}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to withdraw your payout balance right now.";
+      redirect(`/agent-dashboard?error=${encodeURIComponent(message)}`);
+    }
+  }
+
   return (
     <AppShell activeNav="agent" mobileActive="profile" showAvatar showMobileLabels mainClassName="pt-8">
       <header className="mb-12 space-y-2">
@@ -95,6 +181,18 @@ export default async function AgentDashboardPage() {
         <h1 className="font-display text-headline-lg text-on-surface">Agent Dashboard</h1>
         <p className="text-body-lg text-on-surface-variant">Manage liquidity, receive nearby payout matches, and close completed handoffs.</p>
       </header>
+
+      {actionError ? (
+        <div className="mb-8 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <strong className="font-semibold">Withdrawal failed: </strong>{actionError}
+        </div>
+      ) : null}
+
+      {actionSuccess ? (
+        <div className="mb-8 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <strong className="font-semibold">Withdrawal update: </strong>{actionSuccess}
+        </div>
+      ) : null}
 
       <AgentLivePresencePanel
         fallbackHub={user.agentProfile?.serviceZone ?? "Saved agent hub"}
@@ -111,7 +209,7 @@ export default async function AgentDashboardPage() {
                 <span className="text-sm font-semibold text-on-surface-variant">Earnings summary</span>
                 <span className="status-success">Live</span>
               </div>
-              <div className="mb-2 font-display text-[3.1rem] font-bold tracking-[-0.03em] text-primary">{formatUsd(earnings)}</div>
+              <div className="mb-2 font-display text-[3.1rem] font-bold tracking-[-0.03em] text-primary">{formatUsdt(earnings)}</div>
               <p className="text-body-md text-on-surface-variant">Agent service fees earned from completed payouts</p>
               <div className="mt-8 h-1.5 rounded-full bg-surface-container-high">
                 <div className="h-full w-3/4 rounded-full bg-primary" />
@@ -120,21 +218,36 @@ export default async function AgentDashboardPage() {
 
             <div className="page-card p-8">
               <div className="mb-6 flex items-start justify-between">
-                <span className="text-sm font-semibold text-on-surface-variant">Liquidity / stake</span>
+                <span className="text-sm font-semibold text-on-surface-variant">Withdrawable balance</span>
                 <Icon name="account_balance_wallet" filled className="text-primary" />
               </div>
               <div className="mb-2 font-display text-[3.1rem] font-bold tracking-[-0.03em] text-on-surface">
-                {activeAssignments.length + availableRequests.length}
-                <span className="text-body-lg font-normal text-on-surface-variant"> live requests</span>
+                {formatNgn(withdrawableAmountNgn)}
               </div>
-              <p className="text-body-md text-on-surface-variant">Open opportunities and active assignments on your desk</p>
+              <p className="text-body-md text-on-surface-variant">Completed cash handoffs waiting to be withdrawn to your settlement account</p>
+              <div className="mt-4 rounded-xl bg-surface-container-low p-4 text-sm text-on-surface-variant">
+                <div className="font-semibold text-on-surface">Destination</div>
+                <div className="mt-1">{settlementDestination}</div>
+                <div className="mt-2">{withdrawableRequests.length} payout{withdrawableRequests.length === 1 ? "" : "s"} ready</div>
+                {processingWithdrawalRequests.length > 0 ? (
+                  <div className="mt-2 text-primary">
+                    {processingWithdrawalRequests.length} payout{processingWithdrawalRequests.length === 1 ? "" : "s"} processing · {formatNgn(processingAmountNgn)}
+                  </div>
+                ) : null}
+              </div>
               <div className="mt-8 flex gap-3">
                 <Link href="/onboarding/agent" className="flex-1 rounded-xl bg-surface-container px-5 py-3 text-center text-sm font-semibold text-on-surface">
-                  Manage stake
+                  Update payout bank
                 </Link>
-                <Link href="/request-detail" className="flex-1 rounded-xl bg-primary px-5 py-3 text-center text-sm font-semibold text-white shadow-md">
-                  View details
-                </Link>
+                <form action={withdrawAction} className="flex-1">
+                  <button
+                    type="submit"
+                    disabled={withdrawableAmountNgn <= 0}
+                    className="w-full rounded-xl bg-primary px-5 py-3 text-center text-sm font-semibold text-white shadow-md disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Withdraw now
+                  </button>
+                </form>
               </div>
             </div>
           </div>
@@ -164,8 +277,11 @@ export default async function AgentDashboardPage() {
                     </div>
 
                     <div className="md:text-center">
-                      <div className="font-display text-[2.1rem] font-bold tracking-[-0.03em] text-on-surface">{formatUsd(request.totalUsd)}</div>
-                      <div className="text-sm font-semibold text-primary">Reward: {formatUsd(request.agentFeeUsd)}</div>
+                      <div className="font-display text-[2.1rem] font-bold tracking-[-0.03em] text-on-surface">Pay: {formatUsdt(request.totalToken)}</div>
+                      {request.estimatedLocalAmount > 0 ? (
+                        <div className="text-sm text-on-surface-variant">Receiver gets: NGN {request.estimatedLocalAmount.toLocaleString()}</div>
+                      ) : null}
+                      <div className="text-sm font-semibold text-primary">Reward: {formatUsdt(request.agentFeeToken)}</div>
                     </div>
 
                     <form action={acceptRequestAction}>
@@ -203,8 +319,8 @@ export default async function AgentDashboardPage() {
                   <div className="text-[1.75rem] font-bold text-on-surface">{completedAssignments.length}</div>
                 </div>
                 <div className="rounded-xl bg-surface-container-low p-4">
-                  <div className="text-caption text-on-surface-variant">Avg. Speed</div>
-                  <div className="text-[1.75rem] font-bold text-on-surface">{averageSpeedMinutes ? `${averageSpeedMinutes}m` : "--"}</div>
+                  <div className="text-caption text-on-surface-variant">Settled</div>
+                  <div className="text-[1.75rem] font-bold text-on-surface">{settledCount}</div>
                 </div>
               </div>
 
@@ -239,13 +355,27 @@ export default async function AgentDashboardPage() {
                         <span className="font-semibold text-on-surface">{request.reference}</span>
                         <span className={`text-sm font-semibold ${meta.className}`}>{meta.label}</span>
                       </div>
-                      <div className="mb-1 text-[1.75rem] font-bold text-on-surface">{formatUsd(request.totalUsd)}</div>
+                      <div className="mb-1 text-[1.75rem] font-bold text-on-surface">{formatUsdt(request.totalToken)}</div>
+                      {request.estimatedLocalAmount > 0 ? (
+                        <div className="text-sm text-on-surface-variant">Receiver gets: NGN {request.estimatedLocalAmount.toLocaleString()}</div>
+                      ) : null}
                       <div className="text-body-md text-on-surface-variant">Receiver: {request.receiverName}</div>
                       <div className="mt-1 text-sm text-on-surface-variant">{request.pickupLocation}</div>
+                      <div className="mt-3">
+                        <span className={settlementMeta(request.settlement?.status).className}>
+                          {settlementMeta(request.settlement?.status).label}
+                        </span>
+                      </div>
                       <div className="mt-4 flex gap-3">
                         <Link href={`/request-detail?id=${request.id}`} className="flex-1 rounded-xl bg-surface-container-high px-4 py-3 text-center text-sm font-semibold text-on-surface">
                           View
                         </Link>
+                        <form action={declineRequestAction} className="flex-1">
+                          <input type="hidden" name="requestId" value={request.id} />
+                          <button type="submit" className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-semibold text-on-surface">
+                            Decline
+                          </button>
+                        </form>
                         <form action={completeRequestAction} className="flex-1">
                           <input type="hidden" name="requestId" value={request.id} />
                           <button type="submit" className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white">

@@ -4,11 +4,13 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PickupMapEmbed } from "@/components/pickup-map-embed";
 import { Icon } from "@/components/ui/icon";
+import { hasAgentCapability } from "@/lib/agent-capability";
 import { requireSignedInUser, getRoleHomePath } from "@/lib/auth-session";
 import {
   acceptPayoutRequest,
   cancelPayoutRequest,
   completePayoutRequest,
+  declinePayoutRequest,
   getLatestRelevantPayoutRequest,
   getPayoutRequestByIdForUser,
   type PayoutRequestRecord
@@ -18,11 +20,8 @@ import { images } from "@/lib/cashnode-data";
 type SearchParams =
   Promise<Record<string, string | string[] | undefined>>;
 
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD"
-  }).format(value);
+function formatUsdt(value: number) {
+  return `${value.toFixed(2)} USDT`;
 }
 
 function formatDateTime(value: string) {
@@ -64,14 +63,14 @@ function buildTimeline(request: PayoutRequestRecord) {
     {
       title: "Request initiated",
       time: formatDateTime(request.createdAt),
-      copy: `Funds secured for ${formatUsd(request.totalUsd)}.`,
+      copy: `Funds secured for ${formatUsdt(request.totalToken)}.`,
       done: true
     },
     {
       title: "Agent assigned",
       time: request.assignedAgent ? formatDateTime(request.assignedAgent.acceptedAt) : "Waiting for assignment",
       copy: request.assignedAgent
-        ? `${request.assignedAgent.name} was matched as the closest live eligible agent and is ready to coordinate pickup.`
+        ? `${request.assignedAgent.name} was matched as the closest eligible agent and is ready to coordinate pickup.`
         : "A verified CashNode agent will pick up this request soon.",
       done: Boolean(request.assignedAgent),
       active: request.status === "open"
@@ -120,7 +119,7 @@ export default async function RequestDetailPage({
 
     const agent = await requireSignedInUser();
 
-    if (agent.role !== "agent") {
+    if (!hasAgentCapability(agent)) {
       redirect(getRoleHomePath(agent.role));
     }
 
@@ -144,6 +143,28 @@ export default async function RequestDetailPage({
     const updatedRequest = await completePayoutRequest({
       requestId: String(formData.get("requestId") ?? ""),
       actorUser: actor
+    });
+
+    revalidatePath("/agent-dashboard");
+    revalidatePath("/sender-dashboard");
+    revalidatePath("/receiver-portal");
+    revalidatePath("/request-detail");
+    revalidatePath("/payout-confirmation");
+    redirect(`/request-detail?id=${updatedRequest.id}`);
+  }
+
+  async function declineRequestAction(formData: FormData) {
+    "use server";
+
+    const agent = await requireSignedInUser();
+
+    if (!hasAgentCapability(agent)) {
+      redirect(getRoleHomePath(agent.role));
+    }
+
+    const updatedRequest = await declinePayoutRequest({
+      requestId: String(formData.get("requestId") ?? ""),
+      agentUser: agent
     });
 
     revalidatePath("/agent-dashboard");
@@ -194,13 +215,14 @@ export default async function RequestDetailPage({
 
   const status = getStatusMeta(request);
   const timeline = buildTimeline(request);
-  const canAccept = Boolean(user.agentProfile && user.walletAddress && request.status === "open");
+  const canAccept = Boolean(user.agentProfile && !user.agentProfile.manualReviewRequired && request.status === "open");
   const canCancel = request.senderUserId === user.id && request.status === "open";
   const canComplete =
     request.status === "accepted" &&
-    ((user.role === "agent" && request.assignedAgent?.userId === user.id) ||
+    ((hasAgentCapability(user) && request.assignedAgent?.userId === user.id) ||
       request.receiverPhone === user.phoneNumber ||
       request.senderUserId === user.id);
+  const canDecline = request.status === "accepted" && hasAgentCapability(user) && request.assignedAgent?.userId === user.id;
 
   return (
     <AppShell activeNav="request" mobileActive="activity" mainClassName="py-6 md:py-8" mobileProfileHref={homeHref}>
@@ -314,9 +336,9 @@ export default async function RequestDetailPage({
             <h3 className="mb-6 font-display text-headline-md text-on-surface">Financial Summary</h3>
             <div className="space-y-4">
               {[
-                { label: "Requested Amount", value: formatUsd(request.amountUsd) },
-                { label: "Processing Fee", value: formatUsd(request.platformFeeUsd) },
-                { label: "Agent Service Fee", value: formatUsd(request.agentFeeUsd) }
+                { label: "Requested Amount", value: formatUsdt(request.tokenAmount) },
+                { label: "Processing Fee", value: formatUsdt(request.platformFeeToken) },
+                { label: "Agent Service Fee", value: formatUsdt(request.agentFeeToken) }
               ].map((row) => (
                 <div key={row.label} className="flex items-center justify-between border-b border-surface-container py-2">
                   <span className="text-body-md text-on-surface-variant">{row.label}</span>
@@ -324,9 +346,19 @@ export default async function RequestDetailPage({
                 </div>
               ))}
               <div className="flex items-center justify-between pt-5">
-                <span className="font-display text-headline-md text-on-surface">Total Payable</span>
-                <span className="font-display text-headline-lg text-primary">{formatUsd(request.totalUsd)}</span>
+                <span className="font-display text-headline-md text-on-surface">You Pay (USDT Total)</span>
+                <div className="text-right">
+                  <div className="font-display text-headline-lg text-primary">{formatUsdt(request.totalToken)}</div>
+                </div>
               </div>
+              {request.estimatedLocalAmount > 0 ? (
+                <div className="flex items-center justify-between pt-3">
+                  <span className="text-body-md text-on-surface-variant">Receiver Gets (Cash)</span>
+                  <div className="text-right text-sm font-semibold text-on-surface-variant">
+                    {request.localCurrency} {request.estimatedLocalAmount.toLocaleString()}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-8 grid gap-4 border-t border-surface-container pt-6 md:grid-cols-2">
@@ -378,9 +410,27 @@ export default async function RequestDetailPage({
               </form>
             ) : null}
 
+            {canDecline ? (
+              <form action={declineRequestAction}>
+                <input type="hidden" name="requestId" value={request.id} />
+                <button type="submit" className="rounded-xl border border-stone-200 bg-white px-6 py-3 text-sm font-semibold text-on-surface">
+                  Decline Request
+                </button>
+              </form>
+            ) : null}
+
             <Link href={`/payout-confirmation?id=${request.id}`} className="rounded-xl border border-primary/15 bg-white px-6 py-3 text-sm font-semibold text-primary">
               Open Pickup Pass
             </Link>
+
+            <a
+              href={request.receiverWhatsAppUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-xl border border-stone-200 bg-white px-6 py-3 text-sm font-semibold text-on-surface"
+            >
+              Send WhatsApp Details
+            </a>
           </div>
         </div>
 

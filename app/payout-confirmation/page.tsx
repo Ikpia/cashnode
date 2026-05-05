@@ -4,17 +4,17 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PickupMapEmbed } from "@/components/pickup-map-embed";
 import { Icon } from "@/components/ui/icon";
+import { hasAgentCapability } from "@/lib/agent-capability";
 import { requireSignedInUser, getRoleHomePath } from "@/lib/auth-session";
 import { completePayoutRequest, getLatestRelevantPayoutRequest, getPayoutRequestByIdForUser } from "@/lib/payout-requests";
 
 type SearchParams =
   Promise<Record<string, string | string[] | undefined>>;
 
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD"
-  }).format(value);
+function formatUsdt(value: unknown) {
+  const parsedValue = typeof value === "number" ? value : Number(value);
+  const normalizedValue = Number.isFinite(parsedValue) ? parsedValue : 0;
+  return `${normalizedValue.toFixed(2)} USDT`;
 }
 
 function formatCountdown(updatedAt: string) {
@@ -84,7 +84,7 @@ export default async function PayoutConfirmationPage({
 
   const canComplete =
     request.status === "accepted" &&
-    ((user.role === "agent" && request.assignedAgent?.userId === user.id) ||
+    ((hasAgentCapability(user) && request.assignedAgent?.userId === user.id) ||
       request.receiverPhone === user.phoneNumber ||
       request.senderUserId === user.id);
 
@@ -106,7 +106,7 @@ export default async function PayoutConfirmationPage({
           </p>
           {request.assignedAgent?.distanceLabel ? (
             <p className="text-sm text-on-surface-variant">
-              CashNode matched the nearest live eligible agent, {request.assignedAgent.distanceLabel} from this pickup point.
+              CashNode matched the nearest eligible agent, {request.assignedAgent.distanceLabel} from this pickup point.
             </p>
           ) : null}
         </div>
@@ -170,8 +170,16 @@ export default async function PayoutConfirmationPage({
         <section className="page-card rounded-[1.75rem] p-6">
           <div className="mb-4 flex items-center justify-between">
             <span className="text-body-lg text-on-surface">Amount to Receive</span>
-            <span className="font-display text-headline-md text-primary">{formatUsd(request.amountUsd)}</span>
+            <div className="text-right">
+              <div className="font-display text-headline-md text-primary">{formatUsdt(request.tokenAmount ?? request.amountUsd)}</div>
+              {request.estimatedLocalAmount > 0 ? (
+                <div className="text-sm font-semibold text-on-surface-variant">≈ {request.localCurrency} {request.estimatedLocalAmount.toLocaleString()}</div>
+              ) : null}
+            </div>
           </div>
+          <p className="mb-3 text-xs text-on-surface-variant">
+            This is the receiver cash amount. Sender fees are charged separately in USDT and are not added to this NGN amount.
+          </p>
           <div className="mb-2 flex items-center justify-between text-on-surface-variant">
             <span className="text-body-lg">Request ID</span>
             <span className="font-mono text-body-lg">{request.reference}</span>
