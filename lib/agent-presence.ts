@@ -1,7 +1,7 @@
 import { ObjectId, type Collection, type WithId } from "mongodb";
 import { getMongoDb } from "@/lib/mongodb";
 
-export const AGENT_PRESENCE_STALE_MS = 1000 * 90;
+export const AGENT_PRESENCE_STALE_MS = 1000 * 180;
 
 type AgentPresenceDocument = {
   userId: ObjectId;

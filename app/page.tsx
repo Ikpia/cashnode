@@ -7,24 +7,24 @@ const flowCards = [
   {
     icon: "send_money",
     title: "1. Sender Creates",
-    copy: "The sender initiates a transfer via the CashNode app, locking liquidity into a smart escrow node.",
-    link: "Start a transfer",
+    copy: "The sender creates a payout request, sees the exact USDT cost, and chooses where the receiver will collect cash.",
+    link: "Create a payout",
     tone: "text-primary",
     bg: "bg-primary/10"
   },
   {
     icon: "verified_user",
     title: "2. Agent Accepts",
-    copy: "A local agent near the receiver accepts the task and verifies their available cash liquidity.",
-    link: "View agent network",
+    copy: "A nearby CashNode agent accepts the request, prepares the handoff, and confirms the pickup point.",
+    link: "See agent flow",
     tone: "text-secondary",
     bg: "bg-secondary-container/20"
   },
   {
     icon: "payments",
     title: "3. Receiver Collects",
-    copy: "The receiver visits the agent, provides a secure OTP, and collects physical cash instantly.",
-    link: "Find locations",
+    copy: "The receiver shows the pickup code, confirms the amount, and collects NGN cash from the assigned agent.",
+    link: "Track a pickup",
     tone: "text-tertiary",
     bg: "bg-tertiary-container/10"
   }
@@ -33,18 +33,33 @@ const flowCards = [
 const valueProps = [
   {
     icon: "security",
-    title: "Immutable Security",
-    copy: "Every transaction is recorded on-chain, ensuring cryptographic proof of settlement for both parties."
+    title: "Clear, Verified Handoffs",
+    copy: "Every payout keeps one reference, one pickup code, and one visible agent trail so users always know what happens next."
   },
   {
     icon: "bolt",
-    title: "Instant Settlement",
-    copy: "Global transfers that settle as fast as you can walk to your nearest CashNode agent."
+    title: "Fast Local Pickup",
+    copy: "Receivers collect from nearby agents instead of waiting for slow bank-to-bank international rails."
   },
   {
     icon: "savings",
-    title: "Ultralow Fees",
-    copy: "By cutting out correspondent banking layers, we pass 80% of traditional costs back to you."
+    title: "Transparent Pricing",
+    copy: "The sender sees the total USDT cost up front, and the receiver sees the exact NGN cash amount for pickup."
+  }
+];
+
+const comparisonRows = [
+  {
+    before: "Receiver needs crypto knowledge or a bank-dependent payout route.",
+    after: "Receiver only needs a pickup point, a cash amount in NGN, and a code."
+  },
+  {
+    before: "Senders mentally calculate fees and handoff risk across separate tools.",
+    after: "CashNode shows total sender cost, receiver cash, and agent handoff in one visible flow."
+  },
+  {
+    before: "Agent reimbursement failures look like broken operations.",
+    after: "Settlement status stays visible even when manual payout handling is required."
   }
 ];
 
@@ -159,7 +174,7 @@ function GlobeNetworkOverlay() {
   );
 }
 
-export default function LandingPage() {
+export default async function LandingPage() {
   return (
     <AppShell activeNav="home" mobileActive="home" mainClassName="px-4 md:px-8">
       <section className="relative left-1/2 right-1/2 -mx-[50vw] w-screen overflow-hidden pt-6 pb-16 shadow-ambient md:pt-8 md:pb-24">
@@ -176,8 +191,11 @@ export default function LandingPage() {
           <div className="max-w-4xl">
             <div className="-translate-y-10 space-y-6 md:-translate-y-14 lg:-translate-y-16">
               <h1 className="mx-auto max-w-3xl font-display text-[2.6rem] font-bold leading-[0.96] tracking-[-0.03em] text-white md:text-[3.85rem]">
-                Turning neighborhood agents into <span className="italic text-[#6ef0bf]">programmable</span> cash-out nodes.
+                Send USDT, assign a nearby agent, and let the receiver pick up <span className="italic text-[#6ef0bf]">cash locally</span>.
               </h1>
+              <p className="mx-auto max-w-2xl text-base text-white [text-shadow:0_2px_12px_rgba(0,0,0,0.55)] md:text-lg">
+                CashNode helps senders fund payouts, agents manage nearby handoffs, and receivers collect NGN with a simple pickup code.
+              </p>
             </div>
 
             <div className="mt-8 flex flex-col justify-center gap-4 sm:flex-row md:mt-10">
@@ -187,17 +205,23 @@ export default function LandingPage() {
               >
                 Create your account
               </Link>
+              <Link
+                href="#how-it-works"
+                className="rounded-xl border border-white/20 bg-white/10 px-8 py-4 text-center text-sm font-semibold text-white backdrop-blur-md transition-transform hover:-translate-y-0.5"
+              >
+                See how it works
+              </Link>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="py-16 md:py-20">
+      <section id="how-it-works" className="py-16 md:py-20">
         <div className="mx-auto mb-14 max-w-2xl text-center">
           <p className="mb-4 text-sm text-stone-500">The Flow of Liquidity</p>
           <h2 className="mb-4 font-display text-headline-lg text-on-surface">Moving value across borders should not take days.</h2>
           <p className="text-body-md text-on-surface-variant">
-            With CashNode, it is a three-step journey from digital asset to physical currency.
+            CashNode keeps it simple: fund the request, match the agent, complete pickup.
           </p>
         </div>
 
@@ -231,7 +255,7 @@ export default function LandingPage() {
             <div>
               <p className="mb-3 text-sm text-stone-500">Built for trust, optimized for speed.</p>
               <h2 className="max-w-xl font-display text-[2.35rem] font-bold leading-tight text-on-surface md:text-[2.65rem]">
-                Infrastructure that feels calm, local, and immediate.
+                Cash pickup should feel calm, local, and easy to follow.
               </h2>
             </div>
 
@@ -252,88 +276,126 @@ export default function LandingPage() {
 
           <div className="page-card glass-panel rounded-[2rem] p-8">
             <div className="mb-8 flex items-center justify-between border-b border-stone-100 pb-5">
-              <h3 className="font-display text-headline-md text-on-surface">Live Node Stats</h3>
-              <span className="status-live">Real-time</span>
+              <h3 className="font-display text-headline-md text-on-surface">What users always understand</h3>
+              <span className="status-live">4 moments</span>
             </div>
 
-            <div className="grid grid-cols-2 gap-8">
-              {liveStats.map((item) => (
-                <div key={item.label}>
-                  <p className="mb-1 text-caption uppercase tracking-[0.14em] text-on-surface-variant">{item.label}</p>
-                  <p className="font-display text-[1.75rem] font-bold text-on-surface">{item.value}</p>
+            <div className="space-y-4">
+              {[
+                "Sender funds a payout and sees the total USDT cost.",
+                "A nearby agent accepts the request and confirms the pickup hub.",
+                "The receiver sees NGN first and collects cash with one code.",
+                "Agent reimbursement stays visible even if settlement is queued manually."
+              ].map((item, index) => (
+                <div key={item} className="flex gap-4 rounded-2xl bg-surface-container-low px-4 py-4">
+                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-white">
+                    {index + 1}
+                  </div>
+                  <p className="text-sm text-on-surface-variant">{item}</p>
                 </div>
               ))}
             </div>
 
-            <div className="mt-8 rounded-2xl bg-surface-container-low p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-sm font-semibold">Lagos Terminal 04</span>
-                <span className="text-sm font-semibold text-primary">+$1,200</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-stone-200">
-                <div className="h-full w-[75%] rounded-full bg-primary" />
-              </div>
-              <p className="mt-3 text-caption text-on-surface-variant">Node Capacity: 75% utilized</p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Link href="/auth" className="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-md">
+                Start using CashNode
+              </Link>
+              <Link href="/support" className="rounded-xl border border-stone-200 bg-white px-5 py-3 text-sm font-semibold text-on-surface">
+                See support options
+              </Link>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="py-20 md:py-28">
-        <div className="grid items-center gap-16 lg:grid-cols-2">
-          <div className="relative">
-            <div className="overflow-hidden rounded-[2.5rem] border-[10px] border-white shadow-ambient">
-              <img src={images.nodeMap} alt="CashNode local liquidity map" className="h-[500px] w-full object-cover" />
-            </div>
-
-            <div className="page-card absolute left-6 top-6 flex items-center gap-4 rounded-2xl px-4 py-3">
-              <div className="h-12 w-12 overflow-hidden rounded-full bg-primary">
-                <img src={images.floatingAgent} alt="Sarah Grocery agent profile" className="h-full w-full object-cover" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold">Sarah&apos;s Grocery</p>
-                <p className="text-caption text-primary">Online - 200m away</p>
-              </div>
-            </div>
+      <section className="pb-12 md:pb-20">
+        <div className="page-card rounded-[2.5rem] p-8 md:p-10">
+          <div className="mb-8 max-w-2xl">
+            <p className="mb-3 text-sm text-stone-500">Why users trust CashNode</p>
+            <h2 className="font-display text-headline-lg text-on-surface">A cleaner story than informal remittance routing.</h2>
+            <p className="mt-3 text-body-md text-on-surface-variant">
+              CashNode reduces confusion for senders, receivers, and agents by keeping the payment story visible from start to finish.
+            </p>
           </div>
 
-          <div className="space-y-8">
-            <div>
-              <p className="mb-3 text-sm text-stone-500">Universal Liquidity Map</p>
-              <h2 className="mb-5 font-display text-headline-lg text-on-surface">The physical infrastructure layer for the new internet of value.</h2>
-              <p className="max-w-xl text-body-lg text-on-surface-variant">
-                CashNode turns existing trusted merchants into mini-banks, making cash access as ubiquitous as a corner store.
-              </p>
+          <div className="space-y-4">
+            {comparisonRows.map((row) => (
+              <div key={row.before} className="grid gap-4 rounded-[1.5rem] border border-stone-100 p-5 md:grid-cols-2">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.16em] text-stone-400">Before</div>
+                  <div className="mt-2 text-sm text-on-surface-variant">{row.before}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.16em] text-primary">With CashNode</div>
+                  <div className="mt-2 text-sm font-semibold text-on-surface">{row.after}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="py-14 md:py-18">
+        <div className="relative overflow-hidden rounded-[2.75rem] shadow-ambient">
+          <img
+            src={images.nodeMap}
+            alt="CashNode local liquidity map"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,15,11,0.9)_0%,rgba(5,15,11,0.76)_34%,rgba(5,15,11,0.38)_58%,rgba(5,15,11,0.8)_100%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_24%,rgba(110,240,191,0.16),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(110,240,191,0.2),transparent_26%)]" />
+
+          <div className="relative z-10 flex min-h-[420px] items-end px-6 py-5 md:px-10 md:py-8 lg:min-h-[460px]">
+            <div className="absolute left-6 top-5 rounded-[1.6rem] border border-white/15 bg-white/95 px-4 py-3 shadow-soft backdrop-blur-md md:left-10 md:top-8">
+              <div className="flex items-center gap-4">
+                <div className="h-12 w-12 overflow-hidden rounded-full bg-primary">
+                  <img src={images.floatingAgent} alt="Sarah Grocery agent profile" className="h-full w-full object-cover" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-on-surface">Sarah&apos;s Grocery</p>
+                  <p className="text-caption text-primary">Online - 200m away</p>
+                </div>
+              </div>
             </div>
 
-            <ul className="space-y-4">
-              {[
-                "Geofenced security perimeters for agents",
-                "Dynamic liquidity rebalancing",
-                "Automated KYB verification for nodes"
-              ].map((item) => (
-                <li key={item} className="flex items-center gap-3 text-body-md text-on-surface">
-                  <Icon name="check_circle" filled className="text-primary" />
-                  {item}
-                </li>
-              ))}
-            </ul>
+            <div className="ml-auto w-full max-w-2xl rounded-[2rem] border border-white/12 bg-[rgba(7,21,16,0.52)] p-6 text-white shadow-[0_24px_60px_rgba(0,0,0,0.22)] backdrop-blur-md md:p-8">
+              <div>
+                <p className="mb-3 text-sm text-white/72">Universal Liquidity Map</p>
+                <h2 className="mb-5 font-display text-headline-lg text-white">A trusted pickup network built on real local businesses.</h2>
+                <p className="max-w-xl text-body-lg text-white/88">
+                  CashNode works with neighborhood agents so receivers can collect cash at familiar locations instead of navigating complex remittance flows.
+                </p>
+              </div>
 
-            <Link
-              href="/agent-dashboard"
-              className="inline-flex rounded-xl border-2 border-primary px-8 py-4 text-sm font-semibold text-primary transition-colors hover:bg-primary hover:text-white"
-            >
-              Explore Local Nodes
-            </Link>
+              <ul className="mt-6 space-y-3">
+                {[
+                  "Live location-aware agent matching",
+                  "Clear pickup codes and request tracking",
+                  "Verified settlement accounts for agent payouts"
+                ].map((item) => (
+                  <li key={item} className="flex items-center gap-3 text-body-md text-white">
+                    <Icon name="check_circle" filled className="text-[#6ef0bf]" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+
+              <Link
+                href="/agent-dashboard"
+                className="mt-6 inline-flex rounded-xl border-2 border-white/30 bg-white/10 px-8 py-4 text-sm font-semibold text-white backdrop-blur-md transition-colors hover:bg-white hover:text-[#083724]"
+              >
+                Explore Agent Workspace
+              </Link>
+            </div>
           </div>
         </div>
       </section>
 
       <section className="subtle-grid relative overflow-hidden rounded-[2rem] bg-primary px-6 py-16 text-center text-white md:px-12 md:py-20">
         <div className="mx-auto max-w-3xl space-y-8">
-          <h2 className="font-display text-[2.2rem] font-bold leading-tight md:text-[2.95rem]">Ready to join the node network?</h2>
+          <h2 className="font-display text-[2.2rem] font-bold leading-tight md:text-[2.95rem]">Ready to send or receive with less friction?</h2>
           <p className="mx-auto max-w-2xl text-body-lg text-white/85">
-            Whether you are sending value home or looking to monetize your business&apos;s idle cash, CashNode is your bridge to the global economy.
+            Whether you are funding a pickup for family or managing payouts as a local agent, CashNode keeps the steps visible and the handoff simple.
           </p>
           <div className="flex flex-col justify-center gap-4 sm:flex-row">
             <Link
@@ -341,6 +403,12 @@ export default function LandingPage() {
               className="rounded-2xl bg-white px-10 py-4 text-sm font-semibold text-primary shadow-md transition-transform hover:-translate-y-0.5"
             >
               Create your account
+            </Link>
+            <Link
+              href="/support"
+              className="rounded-2xl border border-white/20 bg-white/10 px-10 py-4 text-sm font-semibold text-white backdrop-blur-md transition-transform hover:-translate-y-0.5"
+            >
+              Get support
             </Link>
           </div>
         </div>

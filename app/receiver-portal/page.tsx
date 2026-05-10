@@ -1,10 +1,12 @@
+import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireUserRole } from "@/lib/auth-session";
+import { requireSignedInUser } from "@/lib/auth-session";
 import { completePayoutRequest, listReceiverPayoutRequests, type PayoutRequestRecord } from "@/lib/payout-requests";
 import { getWelcomeGreeting } from "@/lib/user-greeting";
 import { AppShell } from "@/components/app-shell";
 import { PickupMapEmbed } from "@/components/pickup-map-embed";
+import { TransactionJourney } from "@/components/transaction-journey";
 import { Icon } from "@/components/ui/icon";
 import { images } from "@/lib/cashnode-data";
 
@@ -12,58 +14,48 @@ function formatUsdt(value: number) {
   return `${value.toFixed(2)} USDT`;
 }
 
-function buildPickupTimeline(request: PayoutRequestRecord | null) {
-  if (!request) {
-    return [];
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function historyStatusMeta(status: PayoutRequestRecord["status"]) {
+  if (status === "completed") {
+    return {
+      label: "Completed",
+      className: "status-success"
+    };
   }
 
-  return [
-    {
-      title: "Request confirmed",
-      time: new Date(request.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
-      copy: "Your sender secured the payout and shared your pickup details.",
-      done: true
-    },
-    {
-      title: "Agent assigned",
-      time: request.assignedAgent
-        ? new Date(request.assignedAgent.acceptedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-        : "Waiting for assignment",
-      copy: request.assignedAgent
-        ? `${request.assignedAgent.name} was matched as the closest eligible cash-out agent and is ready for handoff.`
-        : "A nearby agent will accept the request soon.",
-      done: Boolean(request.assignedAgent),
-      active: !request.assignedAgent
-    },
-    {
-      title: "Pickup ready",
-      time: request.status === "completed" ? "Completed" : request.pickupLocation,
-      copy: request.status === "completed" ? "Cash collected successfully." : `Bring your code to ${request.pickupLocation}.`,
-      done: request.status === "completed",
-      active: request.status === "accepted"
-    },
-    {
-      title: "Cash collected",
-      time: request.completedAt
-        ? new Date(request.completedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-        : "Waiting for confirmation",
-      copy: request.status === "completed" ? "This payout has been fully settled." : "",
-      future: request.status !== "completed"
-    }
-  ];
+  return {
+    label: "Pending",
+    className: "status-pending"
+  };
 }
 
 export default async function ReceiverPortalPage() {
-  const user = await requireUserRole("receiver");
+  const user = await requireSignedInUser();
   const requests = await listReceiverPayoutRequests(user.phoneNumber);
-  const activeRequest = requests.find((request) => request.status === "accepted" || request.status === "open") ?? requests[0] ?? null;
-  const pickupTimeline = buildPickupTimeline(activeRequest);
+  const latestRequest = requests[0] ?? null;
+  const activeRequest =
+    latestRequest && (latestRequest.status === "open" || latestRequest.status === "accepted") ? latestRequest : null;
+  const historyRequests = requests
+    .filter((request) => request.status === "open" || request.status === "accepted" || request.status === "completed")
+    .filter((request) => request.id !== activeRequest?.id);
   const welcomeGreeting = getWelcomeGreeting(user, "Welcome back.");
+  const pickupReady =
+    Boolean(activeRequest?.assignedAgent && activeRequest?.collectionCode) &&
+    activeRequest?.status !== "open" &&
+    activeRequest?.status !== "cancelled";
 
   async function completePickupAction(formData: FormData) {
     "use server";
 
-    const receiver = await requireUserRole("receiver");
+    const receiver = await requireSignedInUser();
     const request = await completePayoutRequest({
       requestId: String(formData.get("requestId") ?? ""),
       actorUser: receiver
@@ -103,8 +95,11 @@ export default async function ReceiverPortalPage() {
             </div>
 
             <div className="page-card min-w-[280px] rounded-[1.75rem] p-5">
-              <div className="mb-2 text-sm font-semibold text-on-surface-variant">Amount available</div>
-              <div className="font-display text-[2rem] font-bold tracking-[-0.03em] text-primary">{formatUsdt(activeRequest.tokenAmount)}</div>
+              <div className="mb-2 text-sm font-semibold text-on-surface-variant">Cash to collect</div>
+              <div className="font-display text-[2rem] font-bold tracking-[-0.03em] text-primary">
+                {activeRequest.localCurrency} {activeRequest.estimatedLocalAmount.toLocaleString()}
+              </div>
+              <div className="mt-2 text-sm text-on-surface-variant">Equivalent payout value: {formatUsdt(activeRequest.tokenAmount)}</div>
               <div className="mt-2 text-sm text-on-surface-variant">Reference: {activeRequest.reference}</div>
             </div>
           </div>
@@ -118,19 +113,31 @@ export default async function ReceiverPortalPage() {
                 <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
                   <div className="max-w-sm">
                     <div className="mb-3 inline-flex rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white">
-                      Collection code
+                      {pickupReady ? "Collection code" : "Pickup preparing"}
                     </div>
-                    <h2 className="font-display text-headline-md text-white">Show this only at pickup</h2>
-                    <p className="mt-2 text-sm text-white/80">The code is tied to this request and expires after collection.</p>
+                    <h2 className="font-display text-headline-md text-white">
+                      {pickupReady ? "Show this only at pickup" : "We will unlock the code once your agent is ready"}
+                    </h2>
+                    <p className="mt-2 text-sm text-white/80">
+                      {pickupReady
+                        ? "The code is tied to this request and should only be shared at the pickup point."
+                        : "You do not need to contact support yet. We are still matching or confirming the assigned pickup agent."}
+                    </p>
                   </div>
 
-                  <div className="rounded-[1.75rem] border border-white/15 bg-white/10 px-5 py-6 text-center backdrop-blur-md">
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.24em] text-white/65">Code</div>
-                    <div className="font-display text-[2.4rem] font-bold tracking-[0.26em] text-white md:text-[2.9rem]">
-                      {activeRequest.collectionCode.slice(0, 3)} {activeRequest.collectionCode.slice(3)}
+                  {pickupReady ? (
+                    <div className="rounded-[1.75rem] border border-white/15 bg-white/10 px-5 py-6 text-center backdrop-blur-md">
+                      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.24em] text-white/65">Code</div>
+                      <div className="font-display text-[2.4rem] font-bold tracking-[0.26em] text-white md:text-[2.9rem]">
+                        {activeRequest.collectionCode.slice(0, 3)} {activeRequest.collectionCode.slice(3)}
+                      </div>
+                      <div className="mt-3 text-sm text-white/75">{activeRequest.status === "completed" ? "Already used" : "Use once at pickup"}</div>
                     </div>
-                    <div className="mt-3 text-sm text-white/75">{activeRequest.status === "completed" ? "Already used" : "Use once at pickup"}</div>
-                  </div>
+                  ) : (
+                    <div className="rounded-[1.75rem] border border-white/15 bg-white/10 px-5 py-6 text-sm text-white/85 backdrop-blur-md md:max-w-[280px]">
+                      Current status: {activeRequest.status === "open" ? "Awaiting agent" : "Preparing pickup details"}
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -234,69 +241,10 @@ export default async function ReceiverPortalPage() {
                 </section>
               </div>
 
-              <section className="page-card p-6 md:p-8">
-                <div className="mb-6 flex items-center justify-between">
-                  <h2 className="font-display text-headline-md text-on-surface">Pickup Steps</h2>
-                  <span className="text-sm font-semibold text-on-surface-variant">Simple and secure</span>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-3">
-                  {[
-                    "Arrive at the hub",
-                    "Show your code",
-                    activeRequest.status === "completed" ? "Pickup complete" : "Confirm and collect"
-                  ].map((title, index) => (
-                    <div key={title} className="rounded-[1.5rem] bg-surface-container-low p-5">
-                      <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-primary text-sm font-semibold text-white">
-                        {index + 1}
-                      </div>
-                      <div className="mb-2 font-semibold text-on-surface">{title}</div>
-                      <div className="text-sm text-on-surface-variant">
-                        {index === 0
-                          ? `Head to ${activeRequest.pickupLocation}.`
-                          : index === 1
-                            ? "Share the collection code only when you are with the assigned agent."
-                            : activeRequest.status === "completed"
-                              ? "This payout has already been settled."
-                              : "Check the amount, collect your cash, and mark the pickup complete."}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
+              <TransactionJourney request={activeRequest} audience="receiver" showSettlement={false} />
             </div>
 
             <aside className="space-y-8 lg:col-span-4">
-              <section className="page-card p-6 md:p-8">
-                <div className="mb-6 flex items-center justify-between">
-                  <h2 className="font-display text-headline-md text-on-surface">Pickup Status</h2>
-                  <span className="status-live inline-flex">Live</span>
-                </div>
-
-                <div className="relative">
-                  <div className="absolute left-4 top-2 h-[calc(100%-1rem)] w-[2px] bg-surface-container-highest" />
-                  <div className="space-y-8">
-                    {pickupTimeline.map((step) => (
-                      <div key={step.title} className={`relative pl-12 ${step.future ? "opacity-45" : ""}`}>
-                        <div
-                          className={`absolute left-0 top-0 flex h-8 w-8 items-center justify-center rounded-full ${
-                            step.done ? "bg-primary" : step.active ? "border-2 border-primary bg-white" : "bg-surface-container-highest"
-                          }`}
-                        >
-                          {step.done ? <Icon name="check" filled className="text-[16px] text-white" /> : null}
-                          {step.active ? <div className="h-3 w-3 rounded-full bg-primary" /> : null}
-                        </div>
-                        <div>
-                          <div className={`font-semibold ${step.active ? "text-primary" : "text-on-surface"}`}>{step.title}</div>
-                          <div className={`mt-1 text-sm ${step.active ? "text-primary" : "text-on-surface-variant"}`}>{step.time}</div>
-                          {step.copy ? <div className="mt-2 text-sm text-on-surface-variant">{step.copy}</div> : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </section>
-
               <section className="page-card p-6 md:p-8">
                 <div className="mb-6">
                   <h2 className="font-display text-headline-md text-on-surface">Need help?</h2>
@@ -332,19 +280,31 @@ export default async function ReceiverPortalPage() {
             </aside>
           </div>
 
-          {activeRequest.status !== "completed" ? (
+          {activeRequest.status === "accepted" ? (
             <form action={completePickupAction} className="mt-8">
               <input type="hidden" name="requestId" value={activeRequest.id} />
               <button type="submit" className="w-full rounded-full bg-primary px-6 py-5 text-lg font-semibold text-white shadow-md">
                 I&apos;ve Received the Cash
               </button>
             </form>
+          ) : activeRequest.status === "open" ? (
+            <div className="mt-8 rounded-2xl bg-surface-container-low px-6 py-5 text-center text-sm font-semibold text-on-surface-variant">
+              Waiting for an agent to hand over cash before you can confirm pickup.
+            </div>
           ) : (
             <div className="mt-8 rounded-2xl bg-primary/10 px-6 py-5 text-center text-sm font-semibold text-primary">
               This payout has already been completed.
             </div>
           )}
         </>
+      ) : historyRequests.length > 0 ? (
+        <div className="page-card p-8">
+          <p className="text-sm font-semibold text-primary">{welcomeGreeting}</p>
+          <h1 className="mt-2 font-display text-headline-lg text-on-surface">Receiver Portal</h1>
+          <p className="mt-3 text-body-lg text-on-surface-variant">
+            No active pickup needs attention right now. Your pending and completed payouts are listed below.
+          </p>
+        </div>
       ) : (
         <div className="page-card p-8">
           <h1 className="font-display text-headline-lg text-on-surface">Receiver Portal</h1>
@@ -353,6 +313,50 @@ export default async function ReceiverPortalPage() {
           </p>
         </div>
       )}
+
+      {historyRequests.length > 0 ? (
+        <section className="mt-8 page-card p-6 md:p-8">
+          <div className="mb-6 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="font-display text-headline-md text-on-surface">Transaction History</h2>
+              <p className="mt-2 text-sm text-on-surface-variant">View all your pending and completed payouts.</p>
+            </div>
+            <span className="text-sm font-semibold text-on-surface-variant">{historyRequests.length} total</span>
+          </div>
+
+          <div className="space-y-3">
+            {historyRequests.map((request) => {
+              const status = historyStatusMeta(request.status);
+
+              return (
+                <div key={request.id} className="flex flex-col gap-4 rounded-xl border border-stone-200 bg-white p-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <p className="text-sm font-semibold text-on-surface">{request.reference}</p>
+                      <span className={status.className}>{status.label}</span>
+                    </div>
+                    <p className="mt-1 text-sm text-on-surface-variant">{request.pickupArea} · {request.pickupLocation}</p>
+                    <p className="mt-1 text-xs text-on-surface-variant">Updated {formatDateTime(request.updatedAt)}</p>
+                  </div>
+
+                  <div className="flex items-center gap-4 md:text-right">
+                    <div>
+                      <div className="text-sm font-semibold text-on-surface">{request.localCurrency} {request.estimatedLocalAmount.toLocaleString()}</div>
+                      <div className="text-xs text-on-surface-variant">{formatUsdt(request.tokenAmount)}</div>
+                    </div>
+                    <Link
+                      href={`/request-detail?id=${request.id}`}
+                      className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-semibold text-on-surface"
+                    >
+                      Open
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
     </AppShell>
   );
 }

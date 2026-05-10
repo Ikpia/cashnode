@@ -282,7 +282,7 @@ CashNode stands out because it combines:
 - clear economic incentives
 - a path from MVP to startup
 
-It is also investor-legible. Judges can understand how the network grows, why agents join, and where the moat could come from over time.
+It is also investor-legible. Stakeholders can understand how the network grows, why agents join, and where the moat could come from over time.
 
 ## 15. Risks and Assumptions
 

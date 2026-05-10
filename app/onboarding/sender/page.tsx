@@ -8,7 +8,6 @@ import { authFetch } from "@/lib/client-auth";
 
 const senderStepMeta = [
   { title: "Basics", detail: "Profile" },
-  { title: "Verify", detail: "Session" },
   { title: "Fund", detail: "Rail" }
 ] as const;
 
@@ -160,11 +159,11 @@ export default function SenderOnboardingPage() {
           await syncSessionVerification(record.onboardingId);
         }
 
-        if (record.status === "completed" || record.fundingRail) {
-          setActiveStep(2);
-          setFundingMessage("Funding details loaded.");
-        } else if (record.status === "basics_saved" || record.status === "otp_verified") {
+        if (record.status === "completed" || record.fundingRail || record.status === "basics_saved" || record.status === "otp_verified") {
           setActiveStep(1);
+          if (record.fundingRail) {
+            setFundingMessage("Funding details loaded.");
+          }
         }
       } catch (error) {
         setDraftMessage(error instanceof Error ? error.message : "Unable to load your sender setup.");
@@ -321,12 +320,6 @@ export default function SenderOnboardingPage() {
       }
     }
 
-    if (nextStep > 1 && !otpVerified) {
-      setOtpMessage("Your verified sign-in session must be confirmed before funding.");
-      setActiveStep(1);
-      return;
-    }
-
     setActiveStep(nextStep);
   };
 
@@ -343,16 +336,6 @@ export default function SenderOnboardingPage() {
     }
 
     if (activeStep === 1) {
-      if (!otpVerified) {
-        setOtpMessage("We still need to confirm your verified sign-in session.");
-        return;
-      }
-
-      setActiveStep(2);
-      return;
-    }
-
-    if (activeStep === 2) {
       await saveFunding();
     }
   };
@@ -360,7 +343,7 @@ export default function SenderOnboardingPage() {
   return (
     <AppShell activeNav="sender" mobileActive="home" mainClassName="py-8">
       <div className="space-y-10">
-        <OnboardingHero eyebrow="Sender onboarding" title="Fast sender setup with one clean verified session." />
+        <OnboardingHero eyebrow="Sender onboarding" title="Fast sender setup with one clean verified session." description="Profile first, funding preference second." />
 
         <StepTabs steps={senderStepMeta.map((step) => step.title)} activeStep={activeStep} onStepChange={handleStepChange} />
 
@@ -419,6 +402,42 @@ export default function SenderOnboardingPage() {
                   </label>
                 </div>
 
+                <div className="mt-6 grid gap-6 md:grid-cols-2">
+                  <div className="rounded-2xl bg-surface-container-low p-5">
+                    <p className="mb-2 font-semibold text-on-surface">Verified session</p>
+                    <p className="mb-4 text-sm text-on-surface-variant">
+                      CashNode is using the phone number from your current sign-in session for sender approvals and pickup updates.
+                    </p>
+                    <div className="flex items-center justify-between rounded-2xl border border-primary/10 bg-white px-4 py-4">
+                      <div>
+                        <div className="text-sm text-on-surface-variant">Verified number</div>
+                        <div className="mt-1 font-semibold text-on-surface">{mobileNumber}</div>
+                      </div>
+                      <span className="status-success inline-flex">Verified</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-surface-container-low p-5">
+                    <p className="mb-2 font-semibold text-on-surface">Why this matters</p>
+                    <p className="mb-4 text-sm text-on-surface-variant">
+                      The same verified session is used to confirm sender actions and keep request alerts tied to the right account.
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      <ChoiceChip label="Verified sign-in" active />
+                      <ChoiceChip label="Pickup updates" />
+                    </div>
+                    {otpMessage ? (
+                      <div
+                        className={`mt-4 rounded-xl px-4 py-3 text-sm ${
+                          otpVerified ? "bg-primary/10 text-primary" : "bg-[#fff1f1] text-[#b42318]"
+                        }`}
+                      >
+                        {otpMessage}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
                 {draftMessage ? (
                   <div
                     className={`mt-5 rounded-xl px-4 py-3 text-sm ${
@@ -434,48 +453,7 @@ export default function SenderOnboardingPage() {
             ) : null}
 
             {activeStep === 1 ? (
-              <SectionCard title="2. Verify" description="Your phone sign-in already covers the security check for payouts.">
-                <div className="grid gap-6 md:grid-cols-2">
-                  <div className="rounded-2xl bg-surface-container-low p-5">
-                    <p className="mb-2 font-semibold text-on-surface">Verified session</p>
-                    <p className="mb-4 text-sm text-on-surface-variant">
-                      CashNode is using the phone number from your current sign-in session.
-                    </p>
-                    <div className="flex items-center justify-between rounded-2xl border border-primary/10 bg-white px-4 py-4">
-                      <div>
-                        <div className="text-sm text-on-surface-variant">Verified number</div>
-                        <div className="mt-1 font-semibold text-on-surface">{mobileNumber}</div>
-                      </div>
-                      <span className="status-success inline-flex">Verified</span>
-                    </div>
-
-                    {otpMessage ? (
-                      <div
-                        className={`mt-4 rounded-xl px-4 py-3 text-sm ${
-                          otpVerified ? "bg-primary/10 text-primary" : "bg-[#fff1f1] text-[#b42318]"
-                        }`}
-                      >
-                        {otpMessage}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="rounded-2xl bg-surface-container-low p-5">
-                    <p className="mb-2 font-semibold text-on-surface">Account safety</p>
-                    <p className="mb-4 text-sm text-on-surface-variant">
-                      Payout updates, collection alerts, and future approvals stay tied to this verified number.
-                    </p>
-                    <div className="flex flex-wrap gap-3">
-                      <ChoiceChip label="Verified sign-in" active />
-                      <ChoiceChip label="Pickup updates" />
-                    </div>
-                  </div>
-                </div>
-              </SectionCard>
-            ) : null}
-
-            {activeStep === 2 ? (
-              <SectionCard title="3. Funding" description="Pick the rail that will power most transfers.">
+              <SectionCard title="2. Funding" description="Pick the rail that will power most transfers.">
                 <div className="mb-5 flex flex-wrap gap-3">
                   {(["USDC", "Bank transfer", "Card"] as FundingRail[]).map((rail) => (
                     <ChoiceChip key={rail} label={rail} active={fundingRail === rail} onClick={() => setFundingRail(rail)} />
@@ -545,14 +523,14 @@ export default function SenderOnboardingPage() {
           </div>
 
           <div className="space-y-8 lg:col-span-4">
-            <ProgressPanel title="Sender progress" caption="Three steps. One visible section at a time." steps={senderSteps} />
+            <ProgressPanel title="Sender progress" caption="Two steps. One visible section at a time." steps={senderSteps} />
 
             <div className="page-card p-8">
               <h3 className="mb-6 font-display text-headline-md text-on-surface">Built-in security</h3>
               <div className="space-y-6">
                 <FeatureBullet icon="shield" title="Verified session" copy="Your authenticated phone session powers sender approval." />
                 <FeatureBullet icon="notifications_active" title="Clear alerts" copy="Pickup updates stay on the confirmed number." />
-                <FeatureBullet icon="lock" title="Escrow first" copy="Funds stay locked before cash is released." />
+                <FeatureBullet icon="price_check" title="Clear pricing" copy="You see the total USDT cost before the receiver goes to collect cash." />
               </div>
             </div>
           </div>

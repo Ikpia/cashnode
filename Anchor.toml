@@ -1,0 +1,19 @@
+[features]
+seeds = false
+skip-lint = false
+
+[programs.localnet]
+cashnode_escrow = "HSo8cgjmAttDUi7rpLUEz8QUmq1SUw4yA2eqPgwdThzz"
+
+[programs.devnet]
+cashnode_escrow = "HSo8cgjmAttDUi7rpLUEz8QUmq1SUw4yA2eqPgwdThzz"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "echo \"CashNode escrow program builds with anchor build. Add integration tests after Anchor is installed.\""

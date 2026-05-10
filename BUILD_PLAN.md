@@ -257,7 +257,7 @@ Outputs:
 
 - write pitch summary
 - write technical explanation
-- outline business model for judges
+- outline business model clearly
 
 ### May 10, 2026
 

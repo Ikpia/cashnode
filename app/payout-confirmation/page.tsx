@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PickupMapEmbed } from "@/components/pickup-map-embed";
+import { TransactionJourney } from "@/components/transaction-journey";
 import { Icon } from "@/components/ui/icon";
 import { hasAgentCapability } from "@/lib/agent-capability";
 import { requireSignedInUser, getRoleHomePath } from "@/lib/auth-session";
@@ -15,14 +16,6 @@ function formatUsdt(value: unknown) {
   const parsedValue = typeof value === "number" ? value : Number(value);
   const normalizedValue = Number.isFinite(parsedValue) ? parsedValue : 0;
   return `${normalizedValue.toFixed(2)} USDT`;
-}
-
-function formatCountdown(updatedAt: string) {
-  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - new Date(updatedAt).getTime()) / 60000));
-  const remainingMinutes = Math.max(5, 30 - elapsedMinutes);
-  const minutes = String(Math.floor(remainingMinutes)).padStart(2, "0");
-  const seconds = "00";
-  return `${minutes}:${seconds}`;
 }
 
 export default async function PayoutConfirmationPage({
@@ -83,14 +76,13 @@ export default async function PayoutConfirmationPage({
   }
 
   const canComplete =
-    request.status === "accepted" &&
-    ((hasAgentCapability(user) && request.assignedAgent?.userId === user.id) ||
-      request.receiverPhone === user.phoneNumber ||
-      request.senderUserId === user.id);
+    request.status === "accepted" && request.receiverPhone === user.phoneNumber;
+  const pickupReady = Boolean(request.assignedAgent && request.collectionCode) && request.status !== "open" && request.status !== "cancelled";
+  const journeyAudience = hasAgentCapability(user) ? "agent" : user.role === "sender" ? "sender" : "receiver";
 
   return (
     <AppShell activeNav="payout" mobileActive="wallet" mainClassName="flex flex-col items-center py-8" mobileProfileHref={homeHref}>
-      <div className="w-full max-w-md space-y-8">
+      <div className="w-full max-w-5xl space-y-8">
         <div className="space-y-3 pt-4 text-center">
           <h1 className="font-display text-headline-lg text-on-surface">
             {request.status === "completed" ? "Payout Complete" : "Payout Ready"}
@@ -111,26 +103,40 @@ export default async function PayoutConfirmationPage({
           ) : null}
         </div>
 
-        <section className="page-card rounded-[2rem] p-8 text-center">
-          <span className="mb-6 inline-block text-sm font-semibold uppercase tracking-[0.3em] text-on-surface">Verification Code</span>
-          <div className="mb-8 flex items-center justify-center gap-2">
-            {[...request.collectionCode].map((digit, index) => (
-              <div
-                key={`${digit}-${index}`}
-                className="flex h-16 w-12 items-center justify-center rounded-xl border border-outline-variant bg-surface-container text-[1.95rem] font-semibold text-primary shadow-inner"
-              >
-                {digit}
+        <section className="mx-auto max-w-md page-card rounded-[2rem] p-8 text-center">
+          <span className="mb-6 inline-block text-sm font-semibold uppercase tracking-[0.3em] text-on-surface">
+            {pickupReady ? "Verification Code" : "Pickup Status"}
+          </span>
+          {pickupReady ? (
+            <>
+              <div className="mb-8 flex items-center justify-center gap-2">
+                {[...request.collectionCode].map((digit, index) => (
+                  <div
+                    key={`${digit}-${index}`}
+                    className="flex h-16 w-12 items-center justify-center rounded-xl border border-outline-variant bg-surface-container text-[1.95rem] font-semibold text-primary shadow-inner"
+                  >
+                    {digit}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
 
-          <div className="status-live inline-flex items-center gap-2 px-5 py-3 text-base">
-            <Icon name="timer" filled className="text-secondary" />
-            {request.status === "completed" ? "Used" : `Expires in ${formatCountdown(request.updatedAt)}`}
-          </div>
+              <div className="status-live inline-flex items-center gap-2 px-5 py-3 text-base">
+                <Icon name="verified" filled className="text-secondary" />
+                {request.status === "completed" ? "Used" : "Active pickup request"}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-2xl bg-surface-container-low px-6 py-6 text-left text-sm text-on-surface-variant">
+              {request.status === "open"
+                ? "Your payout is active, but the pickup code will appear only after a nearby agent accepts the handoff."
+                : request.status === "cancelled"
+                  ? "This request has been cancelled. Pickup details are no longer available."
+                : "Pickup details will appear here as soon as the request is ready."}
+            </div>
+          )}
         </section>
 
-        <section className="page-card rounded-[1.75rem] p-6">
+        <section className="mx-auto max-w-md page-card rounded-[1.75rem] p-6">
           <div className="mb-4 flex items-start justify-between gap-4">
             <div>
               <h2 className="font-display text-headline-md text-on-surface">{request.pickupArea}</h2>
@@ -167,14 +173,14 @@ export default async function PayoutConfirmationPage({
           </div>
         </section>
 
-        <section className="page-card rounded-[1.75rem] p-6">
+        <section className="mx-auto max-w-md page-card rounded-[1.75rem] p-6">
           <div className="mb-4 flex items-center justify-between">
             <span className="text-body-lg text-on-surface">Amount to Receive</span>
             <div className="text-right">
-              <div className="font-display text-headline-md text-primary">{formatUsdt(request.tokenAmount ?? request.amountUsd)}</div>
               {request.estimatedLocalAmount > 0 ? (
-                <div className="text-sm font-semibold text-on-surface-variant">≈ {request.localCurrency} {request.estimatedLocalAmount.toLocaleString()}</div>
+                <div className="font-display text-headline-md text-primary">{request.localCurrency} {request.estimatedLocalAmount.toLocaleString()}</div>
               ) : null}
+              <div className="text-sm font-semibold text-on-surface-variant">Equivalent payout value: {formatUsdt(request.tokenAmount ?? request.amountUsd)}</div>
             </div>
           </div>
           <p className="mb-3 text-xs text-on-surface-variant">
@@ -190,7 +196,9 @@ export default async function PayoutConfirmationPage({
           </div>
         </section>
 
-        <div className="space-y-4 pb-10">
+        <TransactionJourney request={request} audience={journeyAudience} showSettlement={journeyAudience !== "receiver"} />
+
+        <div className="mx-auto max-w-md space-y-4 pb-10">
           {canComplete ? (
             <form action={completePickupAction}>
               <input type="hidden" name="requestId" value={request.id} />

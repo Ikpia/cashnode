@@ -58,44 +58,6 @@ function getStatusMeta(request: PayoutRequestRecord) {
   }
 }
 
-function buildTimeline(request: PayoutRequestRecord) {
-  return [
-    {
-      title: "Request initiated",
-      time: formatDateTime(request.createdAt),
-      copy: `Funds secured for ${formatUsdt(request.totalToken)}.`,
-      done: true
-    },
-    {
-      title: "Agent assigned",
-      time: request.assignedAgent ? formatDateTime(request.assignedAgent.acceptedAt) : "Waiting for assignment",
-      copy: request.assignedAgent
-        ? `${request.assignedAgent.name} was matched as the closest eligible agent and is ready to coordinate pickup.`
-        : "A verified CashNode agent will pick up this request soon.",
-      done: Boolean(request.assignedAgent),
-      active: request.status === "open"
-    },
-    {
-      title: "Pickup ready",
-      time: request.status === "open" ? "Pending agent" : request.pickupLocation,
-      copy: request.status === "open" ? "Pickup details unlock once an agent accepts." : "Use the collection code only at the assigned hub.",
-      done: request.status === "completed",
-      active: request.status === "accepted"
-    },
-    {
-      title: "Funds released",
-      time: request.completedAt ? formatDateTime(request.completedAt) : request.cancelledAt ? formatDateTime(request.cancelledAt) : "Waiting for confirmation",
-      copy:
-        request.status === "completed"
-          ? "Cash was confirmed and the request was fully settled."
-          : request.status === "cancelled"
-            ? "This request was cancelled before pickup."
-            : "",
-      future: request.status !== "completed" && request.status !== "cancelled"
-    }
-  ];
-}
-
 export default async function RequestDetailPage({
   searchParams
 }: {
@@ -214,15 +176,24 @@ export default async function RequestDetailPage({
   }
 
   const status = getStatusMeta(request);
-  const timeline = buildTimeline(request);
-  const canAccept = Boolean(user.agentProfile && !user.agentProfile.manualReviewRequired && request.status === "open");
-  const canCancel = request.senderUserId === user.id && request.status === "open";
+  const canAccept = Boolean(
+    user.agentProfile &&
+      !user.agentProfile.manualReviewRequired &&
+      request.status === "open" &&
+      request.escrow?.status === "funded"
+  );
+  const canCancel =
+    request.senderUserId === user.id &&
+    request.status === "open" &&
+    (!request.escrow ||
+      request.escrow.status === "pending_signature" ||
+      request.escrow.status === "failed" ||
+      request.escrow.status === "cancelled");
   const canComplete =
-    request.status === "accepted" &&
-    ((hasAgentCapability(user) && request.assignedAgent?.userId === user.id) ||
-      request.receiverPhone === user.phoneNumber ||
-      request.senderUserId === user.id);
+    request.status === "accepted" && request.receiverPhone === user.phoneNumber;
   const canDecline = request.status === "accepted" && hasAgentCapability(user) && request.assignedAgent?.userId === user.id;
+  const pickupPassReady = Boolean(request.assignedAgent) && request.status !== "open" && request.status !== "cancelled";
+  const journeyAudience = hasAgentCapability(user) ? "agent" : user.role === "sender" ? "sender" : "receiver";
 
   return (
     <AppShell activeNav="request" mobileActive="activity" mainClassName="py-6 md:py-8" mobileProfileHref={homeHref}>
@@ -313,22 +284,43 @@ export default async function RequestDetailPage({
 
             <div className="relative overflow-hidden rounded-2xl bg-primary p-8 text-white shadow-ambient">
               <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-primary-container/40" />
-              <div>
-                <h3 className="mb-2 font-display text-headline-md">Pickup Code</h3>
-                <p className="max-w-[240px] text-sm text-white/80">
-                  Share this code only at the pickup point when the assigned agent is present.
-                </p>
-              </div>
+              {pickupPassReady ? (
+                <>
+                  <div>
+                    <h3 className="mb-2 font-display text-headline-md">Pickup Code</h3>
+                    <p className="max-w-[240px] text-sm text-white/80">
+                      Share this code only at the pickup point when the assigned agent is present.
+                    </p>
+                  </div>
 
-              <div className="mt-8 flex items-center justify-between rounded-2xl border border-white/20 bg-white/10 p-6 backdrop-blur-md">
-                <div className="flex items-end gap-2 font-display text-[2.5rem] font-bold tracking-[0.18em] md:text-[2.9rem]">
-                  <span>{request.collectionCode.slice(0, 3)}</span>
-                  <span className="text-white/35">{request.collectionCode.slice(3)}</span>
-                </div>
-                <Icon name="visibility" className="text-white/70" />
-              </div>
+                  <div className="mt-8 flex items-center justify-between rounded-2xl border border-white/20 bg-white/10 p-6 backdrop-blur-md">
+                    <div className="flex items-end gap-2 font-display text-[2.5rem] font-bold tracking-[0.18em] md:text-[2.9rem]">
+                      <span>{request.collectionCode.slice(0, 3)}</span>
+                      <span className="text-white/35">{request.collectionCode.slice(3)}</span>
+                    </div>
+                    <Icon name="visibility" className="text-white/70" />
+                  </div>
 
-              <div className="mt-6 text-sm text-white/80">{request.pickupLocation}</div>
+                  <div className="mt-6 text-sm text-white/80">{request.pickupLocation}</div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="mb-2 font-display text-headline-md">Pickup Code Unlocks After Agent Match</h3>
+                    <p className="max-w-[320px] text-sm text-white/80">
+                      The code stays hidden until a verified agent accepts the request and the pickup point is ready.
+                    </p>
+                  </div>
+
+                  <div className="mt-8 rounded-2xl border border-white/20 bg-white/10 p-6 text-sm text-white/85 backdrop-blur-md">
+                    {request.status === "open"
+                      ? "We are still matching the nearest eligible agent for this payout."
+                      : "Pickup details will appear here as soon as the request becomes ready."}
+                  </div>
+
+                  <div className="mt-6 text-sm text-white/80">Current status: {status.label}</div>
+                </>
+              )}
             </div>
           </div>
 
@@ -432,38 +424,14 @@ export default async function RequestDetailPage({
               Send WhatsApp Details
             </a>
           </div>
+
         </div>
 
         <aside className="lg:col-span-4">
           <div className="page-card h-full p-8">
-            <h3 className="mb-8 font-display text-headline-md text-on-surface">Request Lifecycle</h3>
+            <h3 className="mb-8 font-display text-headline-md text-on-surface">Pickup Map</h3>
 
-            <div className="relative">
-              <div className="absolute left-4 top-2 h-[calc(100%-1rem)] w-[2px] bg-surface-container-highest" />
-              <div className="space-y-10">
-                {timeline.map((step) => (
-                  <div key={step.title} className={`relative pl-12 ${step.future ? "opacity-40" : ""}`}>
-                    <div
-                      className={`absolute left-0 top-0 flex h-8 w-8 items-center justify-center rounded-full ${
-                        step.done ? "bg-primary" : step.active ? "border-2 border-primary bg-white" : "bg-surface-container-highest"
-                      }`}
-                    >
-                      {step.done ? <Icon name="check" filled className="text-[16px] text-white" /> : null}
-                      {step.active ? <div className="h-3 w-3 rounded-full bg-primary" /> : null}
-                    </div>
-                    <div>
-                      <p className={`font-display text-[1.12rem] ${step.active ? "text-primary" : "text-on-surface"}`}>{step.title}</p>
-                      <p className={`mt-1 ${step.active ? "text-primary" : "text-on-surface-variant"}`}>{step.time}</p>
-                      {step.copy ? <p className="mt-2 text-body-lg text-on-surface-variant">{step.copy}</p> : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-8">
-              <PickupMapEmbed title={`${request.pickupArea} pickup map`} src={request.pickupMapEmbedUrl} className="h-44" />
-            </div>
+            <PickupMapEmbed title={`${request.pickupArea} pickup map`} src={request.pickupMapEmbedUrl} className="h-44" />
 
             <div className="mt-4 rounded-2xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
               <div className="flex items-center justify-between gap-3">
@@ -479,6 +447,28 @@ export default async function RequestDetailPage({
                 <Icon name="directions" className="text-[18px]" />
                 Open exact pin
               </a>
+            </div>
+
+            <div className="mt-6 rounded-2xl border border-stone-200 bg-white p-5">
+              <h4 className="font-semibold text-on-surface">Keep everyone aligned</h4>
+              <p className="mt-2 text-sm text-on-surface-variant">
+                Share the pickup details with the receiver and route any real-world handoff issue to support before cash changes hands.
+              </p>
+              <div className="mt-4 space-y-3">
+                <a
+                  href={request.receiverWhatsAppUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-semibold text-on-surface"
+                >
+                  <Icon name="chat" className="text-[18px]" />
+                  Send receiver update
+                </a>
+                <Link href="/support" className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-md">
+                  Contact support
+                  <Icon name="chevron_right" className="text-[18px]" />
+                </Link>
+              </div>
             </div>
           </div>
         </aside>

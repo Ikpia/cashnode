@@ -23,6 +23,7 @@ type AgentProfileDocument = {
   manualReviewRequired: boolean;
   settlementRail: AgentSettlementRail;
   settlementBankCode?: string;
+  settlementBankName?: string;
   settlementAccountNumber?: string;
   settlementAccountName?: string;
   paystackRecipientCode?: string;
@@ -44,6 +45,7 @@ export type AgentProfileInput = {
   manualReviewRequired?: boolean;
   settlementRail?: AgentSettlementRail;
   settlementBankCode?: string;
+  settlementBankName?: string;
   settlementAccountNumber?: string;
   settlementAccountName?: string;
   paystackRecipientCode?: string | null;
@@ -80,6 +82,7 @@ export type AppAgentProfile = {
   manualReviewRequired: boolean;
   settlementRail: AgentSettlementRail;
   settlementBankCode: string | null;
+  settlementBankName: string | null;
   settlementAccountNumber: string | null;
   settlementAccountName: string | null;
   paystackRecipientCode: string | null;
@@ -152,6 +155,7 @@ function toAppAgentProfile(agentProfile?: AgentProfileDocument): AppAgentProfile
     manualReviewRequired: agentProfile.manualReviewRequired === true,
     settlementRail: agentProfile.settlementRail,
     settlementBankCode: agentProfile.settlementBankCode ?? null,
+    settlementBankName: agentProfile.settlementBankName ?? null,
     settlementAccountNumber: agentProfile.settlementAccountNumber ?? null,
     settlementAccountName: agentProfile.settlementAccountName ?? null,
     paystackRecipientCode: agentProfile.paystackRecipientCode ?? null,
@@ -298,6 +302,7 @@ function buildAgentProfile(input: AgentProfileInput, existingProfile?: AgentProf
     ? ensureAgentSettlementRail(input.settlementRail)
     : existingProfile?.settlementRail ?? "Bank account";
   const settlementBankCode = normalizeBankCode(input.settlementBankCode ?? existingProfile?.settlementBankCode ?? "");
+  const settlementBankName = normalizeOptionalText(input.settlementBankName ?? existingProfile?.settlementBankName ?? "");
   const settlementAccountNumber = normalizeAccountNumber(
     input.settlementAccountNumber ?? existingProfile?.settlementAccountNumber ?? ""
   );
@@ -345,6 +350,7 @@ function buildAgentProfile(input: AgentProfileInput, existingProfile?: AgentProf
     manualReviewRequired,
     settlementRail,
     settlementBankCode: settlementBankCode || undefined,
+    settlementBankName: settlementBankName || undefined,
     settlementAccountNumber: settlementAccountNumber || undefined,
     settlementAccountName: settlementAccountName || undefined,
     paystackRecipientCode: paystackRecipientCode || undefined,
@@ -378,12 +384,18 @@ export async function listActiveAgentUsers() {
   const documents = await collection
     .find({
       onboardingStatus: "active",
-      agentProfile: { $exists: true, $ne: null },
-      "agentProfile.isAvailable": true
+      "agentProfile.isAvailable": true,
+      "agentProfile.manualReviewRequired": { $ne: true }
     })
     .sort({ updatedAt: -1 })
     .toArray();
 
+  return documents.map(toAppUser);
+}
+
+export async function listAdminUsers() {
+  const collection = await getUsersCollection();
+  const documents = await collection.find({}).sort({ updatedAt: -1 }).limit(250).toArray();
   return documents.map(toAppUser);
 }
 
@@ -492,6 +504,86 @@ export async function updateUserProfile(input: {
 
   if (!updatedDocument) {
     throw new Error("Failed to update the user profile.");
+  }
+
+  return toAppUser(updatedDocument);
+}
+
+export async function updateAdminUserAccount(input: {
+  userId: string;
+  onboardingStatus?: OnboardingStatus;
+  isAvailable?: boolean;
+}) {
+  const collection = await getUsersCollection();
+  const now = new Date();
+  const _id = ensureObjectId(input.userId);
+  const user = await collection.findOne({ _id });
+
+  if (!user) {
+    throw new Error("User record not found.");
+  }
+
+  const setPayload: Record<string, unknown> = {
+    updatedAt: now
+  };
+
+  if (
+    input.onboardingStatus === "new" ||
+    input.onboardingStatus === "onboarding" ||
+    input.onboardingStatus === "active"
+  ) {
+    setPayload.onboardingStatus = input.onboardingStatus;
+  }
+
+  if (typeof input.isAvailable === "boolean") {
+    if (!user.agentProfile) {
+      throw new Error("Only POS agent accounts can be marked available or unavailable.");
+    }
+
+    setPayload["agentProfile.isAvailable"] = input.isAvailable;
+  }
+
+  await collection.updateOne({ _id }, { $set: setPayload });
+
+  const updatedDocument = await collection.findOne({ _id });
+
+  if (!updatedDocument) {
+    throw new Error("Failed to update the user account.");
+  }
+
+  return toAppUser(updatedDocument);
+}
+
+export async function updateAgentReviewStatus(input: { userId: string; approved: boolean }) {
+  const collection = await getUsersCollection();
+  const now = new Date();
+  const _id = ensureObjectId(input.userId);
+  const user = await collection.findOne({ _id });
+
+  if (!user) {
+    throw new Error("User record not found.");
+  }
+
+  if (!user.agentProfile) {
+    throw new Error("Only POS agent applications can be reviewed.");
+  }
+
+  await collection.updateOne(
+    { _id },
+    {
+      $set: {
+        onboardingStatus: input.approved ? "active" : "onboarding",
+        "agentProfile.manualReviewRequired": !input.approved,
+        "agentProfile.isAvailable": input.approved,
+        updatedAt: now
+      }
+    }
+  );
+
+  const updatedDocument = await collection.findOne({ _id });
+
+  if (!updatedDocument) {
+    throw new Error("Failed to update the POS agent review status.");
   }
 
   return toAppUser(updatedDocument);

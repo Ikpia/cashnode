@@ -32,14 +32,47 @@ type PaystackResolveAccountData = {
 
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 
-function ensurePaystackSecret() {
-  const secret = process.env.PAYSTACK_SECRET_KEY?.trim();
-
-  if (!secret) {
-    throw new Error("PAYSTACK_SECRET_KEY is required for transfer settlement.");
+function isEnabledFlag(value?: string) {
+  if (!value) {
+    return false;
   }
 
-  return secret;
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+export function getPaystackApiUnavailableReason() {
+  if (!process.env.PAYSTACK_SECRET_KEY?.trim()) {
+    return "Paystack bank verification is not configured for this CashNode deployment.";
+  }
+
+  return null;
+}
+
+export function getAutomaticSettlementUnavailableReason() {
+  if (getPaystackApiUnavailableReason()) {
+    return "Automatic bank payout is not configured for this CashNode deployment.";
+  }
+
+  if (isEnabledFlag(process.env.CASHNODE_DISABLE_AUTOMATIC_SETTLEMENTS)) {
+    return "Automatic bank payout is disabled for this CashNode deployment.";
+  }
+
+  if (!isEnabledFlag(process.env.CASHNODE_ENABLE_AUTOMATIC_SETTLEMENTS)) {
+    return "Automatic bank payout is not enabled for this CashNode deployment.";
+  }
+
+  return null;
+}
+
+function ensurePaystackSecret() {
+  const secret = process.env.PAYSTACK_SECRET_KEY?.trim();
+  const unavailableReason = getPaystackApiUnavailableReason();
+
+  if (unavailableReason) {
+    throw new Error(unavailableReason);
+  }
+
+  return secret!;
 }
 
 async function paystackFetch<T>(input: {

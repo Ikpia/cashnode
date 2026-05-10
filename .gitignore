@@ -5,3 +5,6 @@ node_modules
 .env.*.local
 base44-backend-firebase-adminsdk-fbsvc-d989798b32.json
 stitch_cashnode_premium_fintech_interface
+target
+
+.vercel

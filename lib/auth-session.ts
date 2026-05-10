@@ -33,6 +33,25 @@ export function getEntryPathForRole(role: UserRole, onboardingStatus: Onboarding
   return onboardingStatus === "active" ? getRoleHomePath(role) : getRoleOnboardingPath(role);
 }
 
+function parseAdminEnvList(value: string | undefined) {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizePhoneForAdminCheck(phoneNumber: string | null | undefined) {
+  return phoneNumber?.replace(/\D/g, "") ?? "";
+}
+
+export function isAdminUser(user: Pick<AppUser, "id" | "phoneNumber">) {
+  const adminUserIds = parseAdminEnvList(process.env.CASHNODE_ADMIN_USER_IDS);
+  const adminPhoneNumbers = parseAdminEnvList(process.env.CASHNODE_ADMIN_PHONE_NUMBERS).map(normalizePhoneForAdminCheck);
+  const userPhoneNumber = normalizePhoneForAdminCheck(user.phoneNumber);
+
+  return adminUserIds.includes(user.id) || Boolean(userPhoneNumber && adminPhoneNumbers.includes(userPhoneNumber));
+}
+
 export async function getCurrentSessionUser(): Promise<AppUser | null> {
   const headerStore = await headers();
   const authorizationHeader = headerStore.get("authorization") ?? "";
@@ -80,6 +99,16 @@ export async function requireSignedInUser() {
   return sessionUser;
 }
 
+export async function requireAdminUser() {
+  const sessionUser = await requireSignedInUser();
+
+  if (!isAdminUser(sessionUser)) {
+    redirect("/dashboard");
+  }
+
+  return sessionUser;
+}
+
 export async function requireUserRole(role: UserRole) {
   const sessionUser = await requireSignedInUser();
 
@@ -87,6 +116,12 @@ export async function requireUserRole(role: UserRole) {
     if (sessionUser.onboardingStatus !== "active" || !sessionUser.agentProfile) {
       redirect("/onboarding/agent");
     }
+
+    return sessionUser;
+  }
+
+  if (sessionUser.role !== role) {
+    redirect(getRoleOnboardingPath(role));
   }
 
   return sessionUser;

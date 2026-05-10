@@ -126,7 +126,7 @@ export function AuthControls() {
   };
 
   if (isLoading) {
-    return <div className="text-sm text-stone-400">Checking session...</div>;
+    return <div className="h-10 w-36 animate-pulse rounded-full bg-stone-100" aria-hidden="true" />;
   }
 
   if (!user) {

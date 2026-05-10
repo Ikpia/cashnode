@@ -93,6 +93,7 @@ export function PickupLocationSelector({
   );
 
   const selectedHub = hubs.find((hub) => hub.id === selectedHubId) ?? hubs[0] ?? null;
+  const topSearchMatch = matchingLocations[0] ?? null;
   const lastEmittedHubIdRef = useRef<string | null>(null);
   const lastEmittedDetailRef = useRef<string>(initialDetail);
   const onLocationChangeRef = useRef(onLocationChange);
@@ -269,7 +270,7 @@ export function PickupLocationSelector({
       <input type="hidden" name={areaFieldName} value={selectedHub?.id ?? ""} />
 
       <label className="space-y-2">
-        <span className="text-sm font-semibold text-stone-600">Search location</span>
+        <span className="text-sm font-semibold text-stone-600">Search hub or city</span>
         <input
           type="text"
           value={searchTerm}
@@ -349,7 +350,7 @@ export function PickupLocationSelector({
 
       {selectedHub ? (
         <div className="rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
-          Selected pickup point: <span className="font-semibold text-on-surface">{selectedHub.address}</span>
+          Selected pickup point: <span className="font-semibold text-on-surface">{selectedHub.area}</span> · {selectedHub.address}
         </div>
       ) : null}
 
@@ -369,8 +370,8 @@ export function PickupLocationSelector({
       {searchTerm.trim() ? (
         <div className="rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
           {matchingLocations.length > 0
-            ? `Search matched ${matchingLocations.length} location${matchingLocations.length === 1 ? "" : "s"}.`
-            : "No pickup location matches that search yet."}
+            ? `Top match selected: ${topSearchMatch?.area ?? "Pickup hub"}${topSearchMatch?.city ? `, ${topSearchMatch.city}` : ""}.`
+            : "No pickup location matches that search yet. Try another neighborhood or choose from the lists below."}
         </div>
       ) : null}
 
@@ -385,14 +386,14 @@ export function PickupLocationSelector({
       {previewEnabled && preview ? (
         <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-4 text-sm">
           <p className="font-semibold text-on-surface">
-            Estimated payout in NGN:{" "}
+            Estimated receiver cash amount:{" "}
             <span className="text-primary">
               {preview.localCurrency} {preview.estimatedLocalAmount.toLocaleString("en-NG")}
             </span>
           </p>
           {preview.nearestAgent ? (
             <div className="mt-2 text-on-surface-variant">
-              Nearest eligible agent: <span className="font-semibold text-on-surface">{preview.nearestAgent.name}</span> ({preview.nearestAgent.distanceLabel})
+              Likely pickup agent: <span className="font-semibold text-on-surface">{preview.nearestAgent.name}</span> ({preview.nearestAgent.distanceLabel})
             </div>
           ) : (
             <div className="mt-2 text-[#b42318]">No eligible agent is currently available for this amount and location.</div>

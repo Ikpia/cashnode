@@ -8,6 +8,9 @@ import { ChoiceChip, FeatureBullet, OnboardingHero, ProgressPanel, SectionCard, 
 import { authFetch } from "@/lib/client-auth";
 import { nigeriaPickupLocations } from "@/lib/pickup-locations";
 
+const dailyCapacityPresets = [500000, 1000000, 2000000];
+const maxSinglePayoutPresets = [100000, 300000, 500000];
+
 const agentStepMeta = [
   { title: "Business", detail: "Owner + zone" },
   { title: "Verify", detail: "ID + store" },
@@ -28,6 +31,7 @@ type ProfileUser = {
     maxSinglePayoutNgn: number;
     settlementRail: "USDC wallet" | "Bank account" | "Mobile money";
     settlementBankCode: string | null;
+    settlementBankName: string | null;
     settlementAccountNumber: string | null;
     settlementAccountName: string | null;
   } | null;
@@ -42,6 +46,20 @@ type BankOption = {
 
 function shouldUseDisplayName(value: string) {
   return Boolean(value) && !/\b(Sender|Agent|Receiver)\b/.test(value);
+}
+
+function normalizeCurrencyInput(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function formatNgnLabel(value: string) {
+  const parsedValue = Number(value);
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return "NGN 0";
+  }
+
+  return `NGN ${parsedValue.toLocaleString("en-NG")}`;
 }
 
 export default function AgentOnboardingPage() {
@@ -63,8 +81,8 @@ export default function AgentOnboardingPage() {
   const [settlementAccountName, setSettlementAccountName] = useState("");
   const [isResolvingAccount, setIsResolvingAccount] = useState(false);
   const [accountResolutionError, setAccountResolutionError] = useState("");
-  const [dailyCapacity, setDailyCapacity] = useState("NGN 2,000,000");
-  const [maxSinglePayout, setMaxSinglePayout] = useState("NGN 300,000");
+  const [dailyCapacity, setDailyCapacity] = useState("2000000");
+  const [maxSinglePayout, setMaxSinglePayout] = useState("300000");
   const [activationMessage, setActivationMessage] = useState("");
   const [isHydrating, setIsHydrating] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -73,6 +91,7 @@ export default function AgentOnboardingPage() {
     ...step,
     state: activeStep > index ? ("done" as const) : activeStep === index ? ("current" as const) : ("upcoming" as const)
   }));
+  const selectedBank = banks.find((bank) => bank.code === settlementBankCode);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -107,8 +126,8 @@ export default function AgentOnboardingPage() {
           setSettlementBankCode(user.agentProfile.settlementBankCode ?? "");
           setSettlementAccountNumber(user.agentProfile.settlementAccountNumber ?? "");
           setSettlementAccountName(user.agentProfile.settlementAccountName ?? "");
-          setDailyCapacity(`NGN ${user.agentProfile.dailyCapacityNgn.toLocaleString("en-NG")}`);
-          setMaxSinglePayout(`NGN ${user.agentProfile.maxSinglePayoutNgn.toLocaleString("en-NG")}`);
+          setDailyCapacity(String(user.agentProfile.dailyCapacityNgn));
+          setMaxSinglePayout(String(user.agentProfile.maxSinglePayoutNgn));
         }
 
         if (shouldUseDisplayName(user.displayName)) {
@@ -229,6 +248,13 @@ export default function AgentOnboardingPage() {
       return;
     }
 
+    const selectedSettlementBank = banks.find((bank) => bank.code === settlementBankCode);
+
+    if (!selectedSettlementBank) {
+      setActivationMessage("Selected bank not found. Please choose a valid bank from the list.");
+      return;
+    }
+
     setIsSubmitting(true);
     setActivationMessage("");
 
@@ -251,9 +277,11 @@ export default function AgentOnboardingPage() {
             maxSinglePayoutNgn: maxSinglePayout,
             settlementRail,
             settlementBankCode: settlementBankCode.trim(),
+            settlementBankName: selectedSettlementBank.name,
             settlementAccountNumber: settlementAccountNumber.trim(),
             settlementAccountName: settlementAccountName.trim(),
-            isAvailable: true
+            manualReviewRequired: true,
+            isAvailable: false
           }
         })
       });
@@ -263,7 +291,7 @@ export default function AgentOnboardingPage() {
         throw new Error(payload.error ?? "Unable to activate the agent profile.");
       }
 
-      setActivationMessage("Agent application saved. Redirecting to your dashboard...");
+      setActivationMessage("Agent application saved for admin review. Redirecting to your dashboard...");
       router.replace(payload.redirectPath ?? "/agent-dashboard");
       router.refresh();
     } catch (error) {
@@ -349,18 +377,29 @@ export default function AgentOnboardingPage() {
             ) : null}
 
             {activeStep === 1 ? (
-              <SectionCard title="2. Verification" description="Collect only the proof needed to approve the agent.">
+              <SectionCard title="2. Review checklist" description="Show the requirements clearly before operations review the agent.">
                 <div className="mb-5 flex flex-wrap gap-3">
                   <ChoiceChip label="Owner ID" active />
-                  <ChoiceChip label="Store proof" />
-                  <ChoiceChip label="Manual review" />
+                  <ChoiceChip label="Store proof" active />
+                  <ChoiceChip label="Manual review" active />
+                </div>
+
+                <div className="mb-6 rounded-2xl bg-primary/5 px-4 py-4 text-sm text-on-surface-variant">
+                  This screen is a preparation checklist. Document capture and approval are handled during operations review after you submit the application.
                 </div>
 
                 <div className="grid gap-5 md:grid-cols-2">
-                  <UploadTile title="Government ID" copy="National ID, passport, or driver's license." />
-                  <UploadTile title="Owner selfie" copy="Quick face match for review." icon="photo_camera" />
-                  <UploadTile title="Storefront photo" copy="Show the outside of the POS location." icon="store" />
-                  <UploadTile title="Proof of address" copy="Utility bill or registration document." icon="location_on" />
+                  {[
+                    { title: "Government ID", copy: "National ID, passport, or driver's license for the owner on the profile." },
+                    { title: "Owner selfie", copy: "A clear face photo that matches the submitted ID." },
+                    { title: "Storefront photo", copy: "A visible picture of the business front or counter where payouts will happen." },
+                    { title: "Proof of address", copy: "Utility bill, registration document, or any document that anchors the location." }
+                  ].map((item) => (
+                    <div key={item.title} className="rounded-2xl border border-dashed border-outline-variant bg-surface-container-lowest p-5">
+                      <p className="font-semibold text-on-surface">{item.title}</p>
+                      <p className="mt-2 text-sm text-on-surface-variant">{item.copy}</p>
+                    </div>
+                  ))}
                 </div>
               </SectionCard>
             ) : null}
@@ -371,12 +410,21 @@ export default function AgentOnboardingPage() {
                 <div className="grid gap-6 md:grid-cols-2">
                   <label className="space-y-2">
                     <span className="text-sm font-semibold text-stone-600">Daily cash capacity</span>
-                    <input
-                      value={dailyCapacity}
-                      onChange={(event) => setDailyCapacity(event.target.value)}
-                      className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
-                      placeholder="NGN 2,000,000"
-                    />
+                    <div className="flex items-center rounded-xl border border-stone-200 bg-white focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+                      <span className="border-r border-stone-200 px-4 py-3 text-sm font-semibold text-on-surface-variant">NGN</span>
+                      <input
+                        value={dailyCapacity}
+                        onChange={(event) => setDailyCapacity(normalizeCurrencyInput(event.target.value))}
+                        inputMode="numeric"
+                        className="w-full rounded-r-xl px-4 py-3 outline-none"
+                        placeholder="2000000"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {dailyCapacityPresets.map((preset) => (
+                        <ChoiceChip key={preset} label={formatNgnLabel(String(preset))} active={dailyCapacity === String(preset)} onClick={() => setDailyCapacity(String(preset))} />
+                      ))}
+                    </div>
                   </label>
                   <label className="space-y-2">
                     <span className="text-sm font-semibold text-stone-600">Settlement rail</span>
@@ -449,28 +497,41 @@ export default function AgentOnboardingPage() {
                   </label>
                   <label className="space-y-2">
                     <span className="text-sm font-semibold text-stone-600">Max single payout (NGN)</span>
-                    <input
-                      value={maxSinglePayout}
-                      onChange={(event) => setMaxSinglePayout(event.target.value)}
-                      className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
-                      placeholder="NGN 300,000"
-                    />
+                    <div className="flex items-center rounded-xl border border-stone-200 bg-white focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+                      <span className="border-r border-stone-200 px-4 py-3 text-sm font-semibold text-on-surface-variant">NGN</span>
+                      <input
+                        value={maxSinglePayout}
+                        onChange={(event) => setMaxSinglePayout(normalizeCurrencyInput(event.target.value))}
+                        inputMode="numeric"
+                        className="w-full rounded-r-xl px-4 py-3 outline-none"
+                        placeholder="300000"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {maxSinglePayoutPresets.map((preset) => (
+                        <ChoiceChip key={preset} label={formatNgnLabel(String(preset))} active={maxSinglePayout === String(preset)} onClick={() => setMaxSinglePayout(String(preset))} />
+                      ))}
+                    </div>
                   </label>
                 </div>
 
                 <div className="mt-6 grid gap-4 md:grid-cols-3">
                   <div className="rounded-2xl bg-surface-container-low p-4">
                     <div className="text-caption text-on-surface-variant">Daily cap</div>
-                    <div className="mt-2 text-[1.5rem] font-bold text-primary">{dailyCapacity}</div>
+                    <div className="mt-2 text-[1.5rem] font-bold text-primary">{formatNgnLabel(dailyCapacity)}</div>
                   </div>
                   <div className="rounded-2xl bg-surface-container-low p-4">
                     <div className="text-caption text-on-surface-variant">Single payout cap</div>
-                    <div className="mt-2 text-[1.5rem] font-bold text-on-surface">{maxSinglePayout}</div>
+                    <div className="mt-2 text-[1.5rem] font-bold text-on-surface">{formatNgnLabel(maxSinglePayout)}</div>
                   </div>
                 </div>
 
                 <div className="mt-4 rounded-2xl bg-primary/5 px-4 py-4 text-sm text-on-surface-variant">
                   CashNode will route nearby receiver payouts to this hub when your bank details are complete and your operational limits can cover the request.
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-primary/10 bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
+                  Paystack is used here to verify the settlement bank and account name during onboarding. Until automatic payouts are enabled for this deployment, agent withdrawals are queued for manual payout processing after the agent clicks withdraw.
                 </div>
 
                 {activationMessage ? (

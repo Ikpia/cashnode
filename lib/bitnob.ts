@@ -136,7 +136,7 @@ function generateSignature(input: {
   return createHmac("sha256", input.secret).update(signingString).digest("hex");
 }
 
-function isRouteMismatchError(error: unknown) {
+function isRouteMismatchError(error: unknown): error is BitnobRequestError {
   return error instanceof BitnobRequestError && (error.status === 404 || error.status === 405);
 }
 
@@ -190,8 +190,12 @@ async function bitnobFetch(input: {
   }
 
   if (!response.ok) {
+    const responseMessage =
+      payload && typeof payload === "object" && "message" in payload
+        ? (payload as { message?: unknown }).message
+        : null;
     const errorMessage =
-      (payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string" && payload.message) ||
+      (typeof responseMessage === "string" && responseMessage.trim()) ||
       (typeof payload === "string" && payload.trim()) ||
       `Bitnob request failed with status ${response.status} on ${input.requestPath}.`;
     throw new BitnobRequestError({

@@ -1,3 +1,5 @@
+import type { Transaction } from "@solana/web3.js";
+
 export type SolanaProvider = {
   isPhantom?: boolean;
   publicKey?: {
@@ -11,6 +13,8 @@ export type SolanaProvider = {
     } | null;
   }>;
   disconnect(): Promise<void>;
+  signTransaction?<T extends Transaction>(transaction: T): Promise<T>;
+  signAndSendTransaction?(transaction: Transaction): Promise<{ signature: string } | string>;
   on?(event: string, handler: (...args: unknown[]) => void): void;
   off?(event: string, handler: (...args: unknown[]) => void): void;
 };

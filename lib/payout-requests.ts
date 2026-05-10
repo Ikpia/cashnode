@@ -2,7 +2,12 @@ import { ObjectId, type Collection, type WithId } from "mongodb";
 import { getFreshOnlineAgentPresenceByUserId, listFreshOnlineAgentPresenceMap } from "@/lib/agent-presence";
 import { createBitnobUsdtNgnQuote, executeBitnobUsdtNgnPayout } from "@/lib/bitnob";
 import { getMongoDb } from "@/lib/mongodb";
-import { createPaystackTransferRecipient, initiatePaystackTransfer, verifyPaystackTransfer } from "@/lib/paystack";
+import {
+  createPaystackTransferRecipient,
+  getAutomaticSettlementUnavailableReason,
+  initiatePaystackTransfer,
+  verifyPaystackTransfer
+} from "@/lib/paystack";
 import {
   buildPickupDirectionsUrl,
   buildPickupMapEmbedUrl,
@@ -30,6 +35,7 @@ export type SettlementStatus =
   | "transfer_pending"
   | "transfer_success"
   | "transfer_failed";
+type SettlementProvider = "paystack" | "manual";
 
 type ConversionQuoteDocument = {
   provider: "bitnob";
@@ -48,7 +54,7 @@ type ConversionQuoteDocument = {
 };
 
 type SettlementDocument = {
-  provider: "paystack";
+  provider: SettlementProvider;
   status: SettlementStatus;
   recipientCode?: string;
   transferCode?: string;
@@ -62,6 +68,64 @@ type SettlementDocument = {
   failedAt?: Date;
   failureReason?: string;
 };
+
+type EscrowDocument = {
+  provider: "solana";
+  cluster: string;
+  programId: string;
+  status: "pending_signature" | "funded" | "accepted" | "paid" | "completed" | "cancelled" | "failed";
+  escrowAddress: string;
+  referenceSeed: string;
+  senderWallet: string;
+  agentWallet?: string | null;
+  amountTokenUnits: number;
+  agentFeeTokenUnits: number;
+  platformFeeTokenUnits?: number;
+  createSignature?: string;
+  acceptSignature?: string;
+  markPaidSignature?: string;
+  completeSignature?: string;
+  cancelSignature?: string;
+  failureReason?: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type LegacyEscrowDocument = EscrowDocument & {
+  amountLamports?: number;
+  agentFeeLamports?: number;
+  platformFeeLamports?: number;
+};
+
+const VALID_ESCROW_TRANSITIONS: Record<
+  "create" | "accept" | "mark_paid" | "complete" | "cancel",
+  EscrowDocument["status"][]
+> = {
+  create: ["pending_signature"],
+  accept: ["funded"],
+  mark_paid: ["accepted"],
+  complete: ["accepted", "paid"],
+  cancel: ["pending_signature", "funded"]
+};
+
+const ESCROW_ACTION_TARGET_STATUS: Record<
+  "create" | "accept" | "mark_paid" | "complete" | "cancel",
+  EscrowDocument["status"]
+> = {
+  create: "funded",
+  accept: "accepted",
+  mark_paid: "paid",
+  complete: "completed",
+  cancel: "cancelled"
+};
+
+const ESCROW_ACTION_SIGNATURE_FIELD = {
+  create: "createSignature",
+  accept: "acceptSignature",
+  mark_paid: "markPaidSignature",
+  complete: "completeSignature",
+  cancel: "cancelSignature"
+} as const;
 
 type AgentAssignmentDocument = {
   userId: ObjectId;
@@ -102,9 +166,11 @@ type PayoutRequestDocument = {
   totalToken: number;
   conversionQuote?: ConversionQuoteDocument;
   settlement?: SettlementDocument;
+  escrow?: EscrowDocument;
   collectionCode: string;
   status: PayoutRequestStatus;
   assignedAgent?: AgentAssignmentDocument;
+  agentMarkedPaidAt?: Date;
   excludedAgentUserIds?: ObjectId[];
   completedAt?: Date;
   cancelledAt?: Date;
@@ -153,7 +219,7 @@ export type PayoutRequestRecord = {
     createdAt: string;
   } | null;
   settlement: {
-    provider: "paystack";
+    provider: SettlementProvider;
     status: SettlementStatus;
     recipientCode: string | null;
     transferCode: string | null;
@@ -166,6 +232,27 @@ export type PayoutRequestRecord = {
     completedAt: string | null;
     failedAt: string | null;
     failureReason: string | null;
+  } | null;
+  escrow: {
+    provider: "solana";
+    cluster: string;
+    programId: string;
+    status: "pending_signature" | "funded" | "accepted" | "paid" | "completed" | "cancelled" | "failed";
+    escrowAddress: string;
+    referenceSeed: string;
+    senderWallet: string;
+    agentWallet: string | null;
+    amountTokenUnits: number;
+    agentFeeTokenUnits: number;
+    platformFeeTokenUnits: number | null;
+    createSignature: string | null;
+    acceptSignature: string | null;
+    markPaidSignature: string | null;
+    completeSignature: string | null;
+    cancelSignature: string | null;
+    failureReason: string | null;
+    createdAt: string;
+    updatedAt: string;
   } | null;
   amountUsd: number;
   estimatedLocalAmount: number;
@@ -191,6 +278,7 @@ export type PayoutRequestRecord = {
     serviceLongitude: number | null;
     locationSource: "live_presence" | "registered_hub" | null;
   } | null;
+  agentMarkedPaidAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
   createdAt: string;
@@ -339,8 +427,25 @@ function buildSettlementBatchReference(agentUserId: string) {
   return reference.length > 50 ? reference.slice(0, 50) : reference.padEnd(16, "0");
 }
 
+const MANUAL_WITHDRAWAL_QUEUE_MESSAGE =
+  "Automatic bank payout is unavailable right now. CashNode queued this withdrawal for manual processing.";
+
 function isThirdPartyPayoutRestriction(message: string) {
   return message.toLowerCase().includes("third party payouts");
+}
+
+function shouldQueueManualWithdrawal(message: string) {
+  const normalizedMessage = message.toLowerCase();
+
+  return (
+    isThirdPartyPayoutRestriction(message) ||
+    normalizedMessage.includes("automatic bank payout") ||
+    normalizedMessage.includes("paystack_secret_key")
+  );
+}
+
+function resolveSettlementProvider(): SettlementProvider {
+  return getAutomaticSettlementUnavailableReason() ? "manual" : "paystack";
 }
 
 function mapPaystackStatusToSettlementStatus(status: string): SettlementStatus {
@@ -410,7 +515,7 @@ function ensureAgentBankSettlementProfile(agentUser: AppUser) {
   const accountName = agentProfile.settlementAccountName?.trim() ?? "";
 
   if (!bankCode || !accountNumber || !accountName) {
-    throw new Error("Agent settlement account is incomplete. Add bank code, account number, and account name in agent onboarding.");
+    throw new Error("Agent settlement account is incomplete. Add settlement bank, account number, and account name in agent onboarding.");
   }
 
   return {
@@ -612,7 +717,7 @@ function serializePayoutRequest(document: WithId<PayoutRequestDocument>): Payout
       : null,
     settlement: document.settlement
       ? {
-          provider: "paystack",
+          provider: document.settlement.provider,
           status: document.settlement.status,
           recipientCode: document.settlement.recipientCode ?? null,
           transferCode: document.settlement.transferCode ?? null,
@@ -626,6 +731,33 @@ function serializePayoutRequest(document: WithId<PayoutRequestDocument>): Payout
           failedAt: document.settlement.failedAt?.toISOString() ?? null,
           failureReason: document.settlement.failureReason ?? null
         }
+      : null,
+    escrow: document.escrow
+      ? (() => {
+          const escrow = document.escrow as LegacyEscrowDocument;
+
+          return {
+            provider: escrow.provider,
+            cluster: escrow.cluster,
+            programId: escrow.programId,
+            status: escrow.status,
+            escrowAddress: escrow.escrowAddress,
+            referenceSeed: escrow.referenceSeed,
+            senderWallet: escrow.senderWallet,
+            agentWallet: escrow.agentWallet ?? null,
+            amountTokenUnits: escrow.amountTokenUnits ?? escrow.amountLamports ?? 0,
+            agentFeeTokenUnits: escrow.agentFeeTokenUnits ?? escrow.agentFeeLamports ?? 0,
+            platformFeeTokenUnits: escrow.platformFeeTokenUnits ?? escrow.platformFeeLamports ?? null,
+            createSignature: escrow.createSignature ?? null,
+            acceptSignature: escrow.acceptSignature ?? null,
+            markPaidSignature: escrow.markPaidSignature ?? null,
+            completeSignature: escrow.completeSignature ?? null,
+            cancelSignature: escrow.cancelSignature ?? null,
+            failureReason: escrow.failureReason ?? null,
+            createdAt: escrow.createdAt.toISOString(),
+            updatedAt: escrow.updatedAt.toISOString()
+          };
+        })()
       : null,
     amountUsd: tokenToUsd(tokenAmount),
     estimatedLocalAmount: document.estimatedLocalAmount,
@@ -656,6 +788,7 @@ function serializePayoutRequest(document: WithId<PayoutRequestDocument>): Payout
           locationSource: document.assignedAgent.locationSource ?? null
         }
       : null,
+    agentMarkedPaidAt: document.agentMarkedPaidAt?.toISOString() ?? null,
     completedAt: document.completedAt?.toISOString() ?? null,
     cancelledAt: document.cancelledAt?.toISOString() ?? null,
     createdAt: document.createdAt.toISOString(),
@@ -1174,6 +1307,49 @@ async function executeAgentSettlement(input: {
   }
 }
 
+async function queueManualWithdrawalRequests(input: {
+  collection: Collection<PayoutRequestDocument>;
+  eligibleRequests: WithId<PayoutRequestDocument>[];
+  transferReference: string;
+  reason: string;
+  recipientCode?: string | null;
+}) {
+  const queuedAt = new Date();
+  const setPayload: Record<string, unknown> = {
+    "settlement.provider": "manual",
+    "settlement.status": "withdrawal_requested",
+    "settlement.reason": input.reason,
+    "settlement.initiatedAt": queuedAt,
+    "settlement.transferReference": input.transferReference,
+    "settlement.lastCheckedAt": queuedAt,
+    "settlement.failureReason": MANUAL_WITHDRAWAL_QUEUE_MESSAGE,
+    updatedAt: queuedAt
+  };
+
+  if (input.recipientCode) {
+    setPayload["settlement.recipientCode"] = input.recipientCode;
+  }
+
+  await input.collection.updateMany(
+    { _id: { $in: input.eligibleRequests.map((request) => request._id) } },
+    {
+      $set: setPayload,
+      $unset: {
+        "settlement.failedAt": "",
+        "settlement.completedAt": "",
+        "settlement.transferCode": ""
+      }
+    }
+  );
+
+  const queuedRequests = await input.collection
+    .find({ _id: { $in: input.eligibleRequests.map((request) => request._id) } })
+    .sort({ completedAt: 1, updatedAt: 1 })
+    .toArray();
+
+  return queuedRequests.map(serializePayoutRequest);
+}
+
 export async function withdrawAgentSettlements(input: { agentUser: AppUser }) {
   const collection = await getPayoutRequestsCollection();
   const agentObjectId = ensureObjectId(input.agentUser.id, "agent user id");
@@ -1202,47 +1378,58 @@ export async function withdrawAgentSettlements(input: { agentUser: AppUser }) {
 
   let recipientCode = existingRecipientCode;
 
-  if (!recipientCode) {
-    const recipient = await createPaystackTransferRecipient({
-      name: accountName,
-      accountNumber,
-      bankCode,
-      description: `CashNode agent ${input.agentUser.displayName || input.agentUser.phoneNumber}`
-    });
-    recipientCode = recipient.recipientCode;
-    await updateAgentSettlementRecipientCode({
-      userId: input.agentUser.id,
+  const transferReference = buildSettlementBatchReference(input.agentUser.id);
+  const reason = `CashNode agent withdrawal (${eligibleRequests.length} payouts)`;
+
+  if (getAutomaticSettlementUnavailableReason()) {
+    return queueManualWithdrawalRequests({
+      collection,
+      eligibleRequests,
+      transferReference,
+      reason,
       recipientCode
     });
   }
 
-  const transferReference = buildSettlementBatchReference(input.agentUser.id);
-  const reason = `CashNode agent withdrawal (${eligibleRequests.length} payouts)`;
-
-  await collection.updateMany(
-    { _id: { $in: eligibleRequests.map((request) => request._id) } },
-    {
-      $set: {
-        "settlement.status": "recipient_created",
-        "settlement.recipientCode": recipientCode,
-        "settlement.reason": reason,
-        "settlement.initiatedAt": new Date(),
-        "settlement.lastCheckedAt": new Date(),
-        updatedAt: new Date()
-      },
-      $unset: {
-        "settlement.failedAt": "",
-        "settlement.failureReason": "",
-        "settlement.completedAt": "",
-        "settlement.transferCode": "",
-        "settlement.transferReference": ""
-      }
-    }
-  );
-
   try {
+    if (!recipientCode) {
+      const recipient = await createPaystackTransferRecipient({
+        name: accountName,
+        accountNumber,
+        bankCode,
+        description: `CashNode agent ${input.agentUser.displayName || input.agentUser.phoneNumber}`
+      });
+      recipientCode = recipient.recipientCode;
+      await updateAgentSettlementRecipientCode({
+        userId: input.agentUser.id,
+        recipientCode
+      });
+    }
+
+    await collection.updateMany(
+      { _id: { $in: eligibleRequests.map((request) => request._id) } },
+      {
+        $set: {
+          "settlement.provider": "paystack",
+          "settlement.status": "recipient_created",
+          "settlement.recipientCode": recipientCode,
+          "settlement.reason": reason,
+          "settlement.initiatedAt": new Date(),
+          "settlement.lastCheckedAt": new Date(),
+          updatedAt: new Date()
+        },
+        $unset: {
+          "settlement.failedAt": "",
+          "settlement.failureReason": "",
+          "settlement.completedAt": "",
+          "settlement.transferCode": "",
+          "settlement.transferReference": ""
+        }
+      }
+    );
+
     const transfer = await initiatePaystackTransfer({
-      recipientCode,
+      recipientCode: recipientCode!,
       amountNgn: totalAmountNgn,
       reference: transferReference,
       reason
@@ -1250,6 +1437,7 @@ export async function withdrawAgentSettlements(input: { agentUser: AppUser }) {
     const nextStatus = mapPaystackStatusToSettlementStatus(transfer.status);
     const now = new Date();
     const setPayload: Record<string, unknown> = {
+      "settlement.provider": "paystack",
       "settlement.status": nextStatus,
       "settlement.transferReference": transfer.reference,
       "settlement.lastCheckedAt": now,
@@ -1286,39 +1474,21 @@ export async function withdrawAgentSettlements(input: { agentUser: AppUser }) {
   } catch (error) {
     const failureReason = error instanceof Error ? error.message : "Unable to run withdrawal transfer.";
 
-    if (isThirdPartyPayoutRestriction(failureReason)) {
-      const queuedAt = new Date();
-
-      await collection.updateMany(
-        { _id: { $in: eligibleRequests.map((request) => request._id) } },
-        {
-          $set: {
-            "settlement.status": "withdrawal_requested",
-            "settlement.transferReference": transferReference,
-            "settlement.lastCheckedAt": queuedAt,
-            "settlement.failureReason": "Automatic bank payout is unavailable right now. CashNode queued this withdrawal for manual processing.",
-            updatedAt: queuedAt
-          },
-          $unset: {
-            "settlement.failedAt": "",
-            "settlement.completedAt": "",
-            "settlement.transferCode": ""
-          }
-        }
-      );
-
-      const queuedRequests = await collection
-        .find({ _id: { $in: eligibleRequests.map((request) => request._id) } })
-        .sort({ completedAt: 1, updatedAt: 1 })
-        .toArray();
-
-      return queuedRequests.map(serializePayoutRequest);
+    if (shouldQueueManualWithdrawal(failureReason)) {
+      return queueManualWithdrawalRequests({
+        collection,
+        eligibleRequests,
+        transferReference,
+        reason,
+        recipientCode
+      });
     }
 
     await collection.updateMany(
       { _id: { $in: eligibleRequests.map((request) => request._id) } },
       {
         $set: {
+          "settlement.provider": "paystack",
           "settlement.status": "transfer_failed",
           "settlement.transferReference": transferReference,
           "settlement.lastCheckedAt": new Date(),
@@ -1438,12 +1608,7 @@ export async function createPayoutRequest(input: {
     throw new Error("Failed to create payout request.");
   }
 
-  const assignedOrOpenDocument = await autoAssignBestEligibleAgent({
-    collection,
-    requestDocument: createdDocument
-  });
-
-  return serializePayoutRequest(assignedOrOpenDocument);
+  return serializePayoutRequest(createdDocument);
 }
 
 export async function listSenderPayoutRequests(senderUserId: string) {
@@ -1457,6 +1622,92 @@ export async function listSenderPayoutRequests(senderUserId: string) {
   }
 
   return refreshedDocuments.map(serializePayoutRequest);
+}
+
+export async function listAdminPayoutRequests() {
+  const collection = await getPayoutRequestsCollection();
+  const documents = await collection.find({}).sort({ updatedAt: -1 }).limit(250).toArray();
+  const refreshedDocuments: WithId<PayoutRequestDocument>[] = [];
+
+  for (const document of documents) {
+    const refreshedDocument = await refreshRequestSettlementStateOnly(collection, document);
+    refreshedDocuments.push(refreshedDocument);
+  }
+
+  return refreshedDocuments.map(serializePayoutRequest);
+}
+
+export async function updateAdminSettlementStatus(input: {
+  requestId: string;
+  status: Extract<SettlementStatus, "withdrawal_requested" | "transfer_success" | "transfer_failed">;
+  note?: string;
+}) {
+  const collection = await getPayoutRequestsCollection();
+  const _id = ensureObjectId(input.requestId, "request id");
+  const document = await collection.findOne({ _id });
+
+  if (!document) {
+    throw new Error("Payout request not found.");
+  }
+
+  if (!document.settlement) {
+    throw new Error("This payout does not have an agent settlement record yet.");
+  }
+
+  const now = new Date();
+  const note = normalizeOptionalText(input.note);
+  const setPayload: Record<string, unknown> = {
+    "settlement.provider": "manual",
+    "settlement.status": input.status,
+    "settlement.lastCheckedAt": now,
+    updatedAt: now
+  };
+  const unsetPayload: Record<string, ""> = {};
+
+  if (input.status === "withdrawal_requested") {
+    setPayload["settlement.initiatedAt"] = document.settlement.initiatedAt ?? now;
+    setPayload["settlement.reason"] = note || document.settlement.reason || "Queued for manual admin payout.";
+    setPayload["settlement.failureReason"] = note || MANUAL_WITHDRAWAL_QUEUE_MESSAGE;
+    unsetPayload["settlement.completedAt"] = "";
+    unsetPayload["settlement.failedAt"] = "";
+    unsetPayload["settlement.transferCode"] = "";
+    unsetPayload["settlement.transferReference"] = "";
+  }
+
+  if (input.status === "transfer_success") {
+    setPayload["settlement.completedAt"] = now;
+    if (note) {
+      setPayload["settlement.reason"] = note;
+    }
+    unsetPayload["settlement.failedAt"] = "";
+    unsetPayload["settlement.failureReason"] = "";
+  }
+
+  if (input.status === "transfer_failed") {
+    setPayload["settlement.failedAt"] = now;
+    setPayload["settlement.failureReason"] = note || "Manual admin payout was marked failed.";
+    unsetPayload["settlement.completedAt"] = "";
+  }
+
+  const updateResult = await collection.updateOne(
+    { _id },
+    {
+      $set: setPayload,
+      ...(Object.keys(unsetPayload).length > 0 ? { $unset: unsetPayload } : {})
+    }
+  );
+
+  if (updateResult.matchedCount !== 1) {
+    throw new Error("Payout request not found or already processed.");
+  }
+
+  const updatedDocument = await collection.findOne({ _id });
+
+  if (!updatedDocument) {
+    throw new Error("Unable to reload the updated payout request.");
+  }
+
+  return serializePayoutRequest(updatedDocument);
 }
 
 export async function listAvailablePayoutRequests(agentUser?: AppUser) {
@@ -1584,6 +1835,183 @@ export async function getPayoutRequestByIdForUser(requestId: string, user: AppUs
   return serializePayoutRequest(refreshedDocument);
 }
 
+export async function initializePayoutEscrow(input: {
+  requestId: string;
+  senderUser: AppUser;
+  senderWallet: string;
+  escrowAddress: string;
+  referenceSeed: string;
+  amountTokenUnits: number;
+  agentFeeTokenUnits: number;
+  platformFeeTokenUnits?: number;
+  programId: string;
+  cluster: string;
+}) {
+  const collection = await getPayoutRequestsCollection();
+  const _id = ensureObjectId(input.requestId, "request id");
+  const document = await collection.findOne({ _id });
+
+  if (!document) {
+    throw new Error("Payout request not found.");
+  }
+
+  if (document.senderUserId.toHexString() !== input.senderUser.id) {
+    throw new Error("Only the sender can initialize escrow for this request.");
+  }
+
+  if (document.status !== "open") {
+    throw new Error("Escrow can only be initialized while the request is open.");
+  }
+
+  const now = new Date();
+
+  const updateResult = await collection.updateOne(
+    { _id, status: "open", senderUserId: ensureObjectId(input.senderUser.id, "sender user id") },
+    {
+      $set: {
+        escrow: {
+          provider: "solana",
+          cluster: input.cluster,
+          programId: input.programId,
+          status: "pending_signature",
+          escrowAddress: input.escrowAddress,
+          referenceSeed: input.referenceSeed,
+          senderWallet: input.senderWallet,
+          agentWallet: document.escrow?.agentWallet ?? null,
+          amountTokenUnits: input.amountTokenUnits,
+          agentFeeTokenUnits: input.agentFeeTokenUnits,
+          platformFeeTokenUnits: input.platformFeeTokenUnits ?? 0,
+          createdAt: document.escrow?.createdAt ?? now,
+          updatedAt: now
+        },
+        updatedAt: now
+      }
+    }
+  );
+
+  if (updateResult.modifiedCount === 0) {
+    throw new Error("Request is no longer open. Refresh and try again.");
+  }
+
+  const updatedDocument = await collection.findOne({ _id });
+
+  if (!updatedDocument) {
+    throw new Error("Failed to initialize request escrow.");
+  }
+
+  return serializePayoutRequest(updatedDocument);
+}
+
+export async function recordPayoutEscrowSignature(input: {
+  requestId: string;
+  actorUser: AppUser;
+  action: "create" | "accept" | "mark_paid" | "complete" | "cancel";
+  signature: string;
+  walletAddress: string;
+  escrowAddress?: string;
+  referenceSeed?: string;
+}) {
+  const collection = await getPayoutRequestsCollection();
+  const _id = ensureObjectId(input.requestId, "request id");
+  const document = await collection.findOne({ _id });
+
+  if (!document) {
+    throw new Error("Payout request not found.");
+  }
+
+  const isSender = document.senderUserId.toHexString() === input.actorUser.id;
+  const isAssignedAgent = document.assignedAgent?.userId.toHexString() === input.actorUser.id;
+
+  if ((input.action === "create" || input.action === "complete" || input.action === "cancel") && !isSender) {
+    throw new Error("Only the sender can record this escrow action.");
+  }
+
+  if ((input.action === "accept" || input.action === "mark_paid") && !isAssignedAgent) {
+    throw new Error("Only the assigned agent can record this escrow action.");
+  }
+
+  const now = new Date();
+  const currentEscrow = document.escrow;
+  const setPayload: Record<string, unknown> = {
+    updatedAt: now,
+    "escrow.updatedAt": now,
+    "escrow.failureReason": null
+  };
+
+  if (input.action === "create") {
+    setPayload["escrow.status"] = "funded";
+    setPayload["escrow.createSignature"] = input.signature;
+    setPayload["escrow.senderWallet"] = input.walletAddress;
+  }
+
+  if (input.action === "accept") {
+    setPayload["escrow.status"] = "accepted";
+    setPayload["escrow.acceptSignature"] = input.signature;
+    setPayload["escrow.agentWallet"] = input.walletAddress;
+  }
+
+  if (input.action === "mark_paid") {
+    setPayload["escrow.status"] = "paid";
+    setPayload["escrow.markPaidSignature"] = input.signature;
+    setPayload["escrow.agentWallet"] = input.walletAddress;
+  }
+
+  if (input.action === "complete") {
+    setPayload["escrow.status"] = "completed";
+    setPayload["escrow.completeSignature"] = input.signature;
+  }
+
+  if (input.action === "cancel") {
+    setPayload["escrow.status"] = "cancelled";
+    setPayload["escrow.cancelSignature"] = input.signature;
+  }
+
+  if (!currentEscrow) {
+    throw new Error("Initialize and fund escrow before recording this action.");
+  }
+
+  const signatureField = ESCROW_ACTION_SIGNATURE_FIELD[input.action];
+  const targetStatus = ESCROW_ACTION_TARGET_STATUS[input.action];
+  const existingSignature = currentEscrow[signatureField];
+
+  if (existingSignature === input.signature && currentEscrow.status === targetStatus) {
+    return serializePayoutRequest(document);
+  }
+
+  const validFromStates = VALID_ESCROW_TRANSITIONS[input.action];
+
+  if (!validFromStates.includes(currentEscrow.status)) {
+    throw new Error(`Cannot perform '${input.action}' when escrow is '${currentEscrow.status}'.`);
+  }
+
+  if (input.escrowAddress) {
+    setPayload["escrow.escrowAddress"] = input.escrowAddress;
+  }
+
+  if (input.referenceSeed) {
+    setPayload["escrow.referenceSeed"] = input.referenceSeed;
+  }
+
+  if (input.action === "cancel") {
+    setPayload.status = "cancelled";
+    setPayload.cancelledAt = now;
+  }
+
+  const updateResult = await collection.updateOne({ _id }, { $set: setPayload });
+
+  if (updateResult.matchedCount !== 1) {
+    throw new Error("Failed to record escrow signature.");
+  }
+
+  const updatedDocument = await collection.findOne({ _id });
+
+  if (!updatedDocument) {
+    throw new Error("Failed to record escrow signature.");
+  }
+
+  return serializePayoutRequest(updatedDocument);
+}
+
 export async function getLatestRelevantPayoutRequest(user: AppUser) {
   const collection = await getPayoutRequestsCollection();
   const filter = {
@@ -1660,7 +2088,7 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
   );
   const now = new Date();
 
-  await collection.updateOne(
+  const acceptResult = await collection.updateOne(
     { _id, status: "open" },
     {
       $set: {
@@ -1676,6 +2104,10 @@ export async function acceptPayoutRequest(input: { requestId: string; agentUser:
       }
     }
   );
+
+  if (acceptResult.modifiedCount === 0) {
+    throw new Error("This request is no longer open. Refresh and try again.");
+  }
 
   const updatedDocument = await collection.findOne({ _id });
 
@@ -1707,8 +2139,8 @@ export async function declinePayoutRequest(input: { requestId: string; agentUser
   ]);
   const now = new Date();
 
-  await collection.updateOne(
-    { _id, status: "accepted" },
+  const declineResult = await collection.updateOne(
+    { _id, status: "accepted", "assignedAgent.userId": ensureObjectId(input.agentUser.id, "agent user id") },
     {
       $set: {
         excludedAgentUserIds: Array.from(excludedAgentUserIds).map((agentUserId) => ensureObjectId(agentUserId, "agent user id")),
@@ -1721,19 +2153,17 @@ export async function declinePayoutRequest(input: { requestId: string; agentUser
     }
   );
 
+  if (declineResult.modifiedCount === 0) {
+    throw new Error("This request is no longer assigned to this agent. Refresh and try again.");
+  }
+
   const reopenedDocument = await collection.findOne({ _id });
 
   if (!reopenedDocument) {
     throw new Error("Failed to reopen payout request after decline.");
   }
 
-  const reassignedDocument = await autoAssignBestEligibleAgent({
-    collection,
-    requestDocument: reopenedDocument,
-    excludedAgentUserIds: Array.from(excludedAgentUserIds)
-  });
-
-  return serializePayoutRequest(reassignedDocument);
+  return serializePayoutRequest(reopenedDocument);
 }
 
 export async function completePayoutRequest(input: { requestId: string; actorUser: AppUser }) {
@@ -1748,17 +2178,40 @@ export async function completePayoutRequest(input: { requestId: string; actorUse
   ensureStatusTransition(document.status, "accepted");
 
   const isAssignedAgent = document.assignedAgent?.userId.toHexString() === input.actorUser.id;
-  const isSender = document.senderUserId.toHexString() === input.actorUser.id;
   const isReceiverByPhone = document.receiverPhone === input.actorUser.phoneNumber;
 
-  if (!isAssignedAgent && !isSender && !isReceiverByPhone) {
+  if (!isAssignedAgent && !isReceiverByPhone) {
     throw new Error("You do not have permission to complete this request.");
   }
 
   const now = new Date();
 
-  await collection.updateOne(
-    { _id, status: "accepted" },
+  if (isAssignedAgent && !isReceiverByPhone) {
+    const markPaidResult = await collection.updateOne(
+      { _id, status: "accepted", "assignedAgent.userId": ensureObjectId(input.actorUser.id, "actor user id") },
+      {
+        $set: {
+          agentMarkedPaidAt: now,
+          updatedAt: now
+        }
+      }
+    );
+
+    if (markPaidResult.modifiedCount === 0) {
+      throw new Error("This request can no longer be marked as paid. Refresh and try again.");
+    }
+
+    const markedPaidDocument = await collection.findOne({ _id });
+
+    if (!markedPaidDocument) {
+      throw new Error("Failed to mark payout as handed out.");
+    }
+
+    return serializePayoutRequest(markedPaidDocument);
+  }
+
+  const completeResult = await collection.updateOne(
+    { _id, status: "accepted", receiverPhone: input.actorUser.phoneNumber },
     {
       $set: {
         status: "completed",
@@ -1767,6 +2220,10 @@ export async function completePayoutRequest(input: { requestId: string; actorUse
       }
     }
   );
+
+  if (completeResult.modifiedCount === 0) {
+    throw new Error("This request can no longer be completed. Refresh and try again.");
+  }
 
   let updatedDocument = await collection.findOne({ _id });
 
@@ -1787,7 +2244,7 @@ export async function completePayoutRequest(input: { requestId: string; actorUse
       {
         $set: {
           settlement: {
-            provider: "paystack",
+            provider: resolveSettlementProvider(),
             status: "available_for_withdrawal",
             amountNgn: availableWithdrawalAmount,
             currency: "NGN",
@@ -2043,10 +2500,19 @@ export async function cancelPayoutRequest(input: { requestId: string; senderUser
     throw new Error("Only open requests can be cancelled.");
   }
 
+  if (
+    document.escrow?.status &&
+    document.escrow.status !== "pending_signature" &&
+    document.escrow.status !== "failed" &&
+    document.escrow.status !== "cancelled"
+  ) {
+    throw new Error("This request has secured funds and cannot be cancelled without an on-chain refund transaction.");
+  }
+
   const now = new Date();
 
-  await collection.updateOne(
-    { _id, status: "open" },
+  const cancelResult = await collection.updateOne(
+    { _id, status: "open", senderUserId: ensureObjectId(input.senderUser.id, "sender user id") },
     {
       $set: {
         status: "cancelled",
@@ -2055,6 +2521,10 @@ export async function cancelPayoutRequest(input: { requestId: string; senderUser
       }
     }
   );
+
+  if (cancelResult.modifiedCount === 0) {
+    throw new Error("This request can no longer be cancelled. Refresh and try again.");
+  }
 
   const updatedDocument = await collection.findOne({ _id });
 

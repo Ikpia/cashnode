@@ -1,7 +1,9 @@
 import { createHash, createHmac, randomInt, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { ObjectId } from "mongodb";
+import { getFirebaseAdminAuth } from "@/lib/firebase-admin";
 import { getMongoDb } from "@/lib/mongodb";
 import { getUserById, updateUserProfile, upsertUserFromFirebaseLogin, type AppUser } from "@/lib/users";
+import { sendWhatsAppVerificationCode as sendWhatsAppProviderVerificationCode } from "@/lib/whatsapp";
 
 type AuthCredentialDocument = {
   userId: ObjectId;
@@ -9,7 +11,9 @@ type AuthCredentialDocument = {
   phoneNumber: string;
   pinHash: string;
   pinSalt: string;
-  whatsappVerifiedAt: Date;
+  phoneVerifiedAt: Date;
+  phoneVerificationProvider: "firebase" | "whatsapp";
+  whatsappVerifiedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -169,6 +173,12 @@ export async function sendWhatsappVerificationCode(phoneNumberInput: unknown) {
   }
 
   const code = String(randomInt(0, 1000000)).padStart(6, "0");
+  const expiresInSeconds = Math.floor(WHATSAPP_CODE_EXPIRY_MS / 1000);
+  const delivery = await sendWhatsAppProviderVerificationCode({
+    phoneNumber,
+    code,
+    expiresInMinutes: Math.ceil(expiresInSeconds / 60)
+  });
 
   await whatsappCodes.insertOne({
     phoneNumber,
@@ -179,8 +189,8 @@ export async function sendWhatsappVerificationCode(phoneNumberInput: unknown) {
 
   return {
     phoneNumber,
-    expiresInSeconds: Math.floor(WHATSAPP_CODE_EXPIRY_MS / 1000),
-    demoCode: process.env.NODE_ENV === "production" ? undefined : code
+    expiresInSeconds,
+    delivery
   };
 }
 
@@ -276,7 +286,78 @@ export async function signupWithWhatsAppPin(input: {
     phoneNumber,
     pinHash,
     pinSalt,
+    phoneVerifiedAt: whatsappVerifiedAt,
+    phoneVerificationProvider: "whatsapp",
     whatsappVerifiedAt,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  return user;
+}
+
+export async function signupWithFirebasePhonePin(input: {
+  fullName: unknown;
+  email: unknown;
+  phoneNumber: unknown;
+  pin: unknown;
+  firebaseIdToken: unknown;
+}) {
+  const fullName = typeof input.fullName === "string" && input.fullName.trim() ? input.fullName.trim() : "";
+
+  if (!fullName) {
+    throw new Error("Full name is required.");
+  }
+
+  const email = normalizeEmail(input.email);
+  const phoneNumber = normalizePhoneNumber(input.phoneNumber);
+  const pin = ensurePin(input.pin);
+  const firebaseIdToken = typeof input.firebaseIdToken === "string" ? input.firebaseIdToken.trim() : "";
+
+  if (!firebaseIdToken) {
+    throw new Error("Firebase phone verification is required.");
+  }
+
+  const decodedToken = await getFirebaseAdminAuth().verifyIdToken(firebaseIdToken);
+
+  if (!decodedToken.phone_number) {
+    throw new Error("Firebase did not verify a phone number for this signup.");
+  }
+
+  if (decodedToken.phone_number !== phoneNumber) {
+    throw new Error("Verified Firebase phone number does not match the signup phone number.");
+  }
+
+  const { credentials } = await getCollections();
+  const existingCredential = await credentials.findOne({
+    $or: [{ email }, { phoneNumber }]
+  });
+
+  if (existingCredential) {
+    throw new Error("An account with this email or phone number already exists.");
+  }
+
+  const baseUser = await upsertUserFromFirebaseLogin({
+    firebaseUid: decodedToken.uid,
+    phoneNumber,
+    requestedRole: "sender"
+  });
+  const user = await updateUserProfile({
+    userId: baseUser.id,
+    displayName: fullName,
+    onboardingStatus: "active"
+  });
+  const { hash: pinHash, salt: pinSalt } = hashSecret(pin);
+  const now = new Date();
+
+  await credentials.insertOne({
+    userId: ensureObjectId(user.id, "user id"),
+    email,
+    phoneNumber,
+    pinHash,
+    pinSalt,
+    phoneVerifiedAt: now,
+    phoneVerificationProvider: "firebase",
     createdAt: now,
     updatedAt: now
   });

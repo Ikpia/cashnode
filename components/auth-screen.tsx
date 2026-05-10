@@ -1,10 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { setStoredAuthToken } from "@/lib/client-auth";
+import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "firebase/auth";
+import { getFriendlyFirebaseAuthMessage } from "@/lib/firebase-auth-messages";
+import { getFirebaseClientAuth } from "@/lib/firebase-client";
 
 type AuthMode = "signin" | "signup";
+
+const RESEND_COOLDOWN_SECONDS = 30;
+const SUPPORT_PHONE = "+2348001110000";
+
+function normalizePhoneInput(value: string) {
+  const trimmed = value.trim();
+  const hasPlusPrefix = trimmed.startsWith("+");
+  const digitsOnly = trimmed.replace(/\D/g, "");
+  return `${hasPlusPrefix ? "+" : ""}${digitsOnly}`;
+}
 
 export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
   const [fullName, setFullName] = useState("");
@@ -13,15 +25,48 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
   const [identifier, setIdentifier] = useState("");
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
-  const [whatsappCode, setWhatsappCode] = useState("");
+  const [phoneCode, setPhoneCode] = useState("");
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState<"idle" | "error" | "success">("idle");
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
+  const [resendCountdown, setResendCountdown] = useState(0);
+  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
+  const confirmationResultRef = useRef<ConfirmationResult | null>(null);
 
-  const sendWhatsAppCode = async () => {
-    if (!phoneNumber.trim()) {
+  useEffect(() => {
+    return () => {
+      recaptchaVerifierRef.current?.clear();
+      recaptchaVerifierRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (resendCountdown <= 0) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => setResendCountdown((current) => current - 1), 1000);
+    return () => window.clearTimeout(timerId);
+  }, [resendCountdown]);
+
+  const getRecaptchaVerifier = () => {
+    if (recaptchaVerifierRef.current) {
+      return recaptchaVerifierRef.current;
+    }
+
+    const verifier = new RecaptchaVerifier(getFirebaseClientAuth(), "firebase-phone-recaptcha", {
+      size: "invisible"
+    });
+    recaptchaVerifierRef.current = verifier;
+    return verifier;
+  };
+
+  const sendFirebasePhoneCode = async () => {
+    const normalizedPhoneNumber = normalizePhoneInput(phoneNumber);
+
+    if (!normalizedPhoneNumber) {
       setStatus("error");
       setMessage("Enter your phone number first.");
       return;
@@ -32,31 +77,22 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
     setMessage("");
 
     try {
-      const response = await fetch("/api/auth/whatsapp/send-code", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          phoneNumber: phoneNumber.trim()
-        })
-      });
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Unable to send WhatsApp code.");
-      }
-
-      setCodeSent(true);
-      setStatus("success");
-      setMessage(
-        payload.demoCode
-          ? `Code sent. Demo code: ${payload.demoCode}`
-          : "Code sent to your WhatsApp number."
+      const confirmationResult = await signInWithPhoneNumber(
+        getFirebaseClientAuth(),
+        normalizedPhoneNumber,
+        getRecaptchaVerifier()
       );
+
+      confirmationResultRef.current = confirmationResult;
+      setCodeSent(true);
+      setResendCountdown(RESEND_COOLDOWN_SECONDS);
+      setStatus("success");
+      setMessage("Code sent to your phone number.");
     } catch (error) {
+      recaptchaVerifierRef.current?.clear();
+      recaptchaVerifierRef.current = null;
       setStatus("error");
-      setMessage(error instanceof Error ? error.message : "Unable to send WhatsApp code.");
+      setMessage(getFriendlyFirebaseAuthMessage(error));
     } finally {
       setIsSendingCode(false);
     }
@@ -81,9 +117,16 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
           throw new Error("PIN confirmation does not match.");
         }
 
-        if (!/^\d{6}$/.test(whatsappCode.trim())) {
-          throw new Error("Enter the 6-digit WhatsApp verification code.");
+        if (!/^\d{6}$/.test(phoneCode.trim())) {
+          throw new Error("Enter the 6-digit phone verification code.");
         }
+
+        if (!confirmationResultRef.current) {
+          throw new Error("Request a Firebase phone code before creating your account.");
+        }
+
+        const phoneCredential = await confirmationResultRef.current.confirm(phoneCode.trim());
+        const firebaseIdToken = await phoneCredential.user.getIdToken();
 
         const response = await fetch("/api/auth/session", {
           method: "POST",
@@ -95,7 +138,7 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
             fullName,
             email,
             phoneNumber,
-            whatsappCode,
+            firebaseIdToken,
             pin
           })
         });
@@ -103,10 +146,6 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
 
         if (!response.ok) {
           throw new Error(payload.error ?? "Unable to create account.");
-        }
-
-        if (typeof payload.token === "string" && payload.token.trim()) {
-          setStoredAuthToken(payload.token.trim());
         }
 
         setStatus("success");
@@ -138,10 +177,6 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Unable to sign in.");
-      }
-
-      if (typeof payload.token === "string" && payload.token.trim()) {
-        setStoredAuthToken(payload.token.trim());
       }
 
       setStatus("success");
@@ -206,28 +241,38 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
                   <span className="text-sm font-semibold text-stone-600">Phone number</span>
                   <input
                     value={phoneNumber}
-                    onChange={(event) => setPhoneNumber(event.target.value)}
+                    onChange={(event) => setPhoneNumber(normalizePhoneInput(event.target.value))}
                     type="tel"
                     placeholder="+234 800 000 0000"
+                    autoComplete="tel"
+                    inputMode="tel"
                     className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
                   />
+                  <p className="text-xs text-on-surface-variant">Firebase will send an OTP to this number for account verification.</p>
                 </label>
 
                 <button
                   type="button"
-                  onClick={() => void sendWhatsAppCode()}
-                  disabled={isSendingCode}
+                  onClick={() => void sendFirebasePhoneCode()}
+                  disabled={isSendingCode || resendCountdown > 0 || !normalizePhoneInput(phoneNumber)}
                   className="w-full rounded-xl border border-primary/15 bg-white px-5 py-3 text-sm font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSendingCode ? "Sending..." : "Send WhatsApp Verification Code"}
+                  {isSendingCode
+                    ? "Sending..."
+                    : resendCountdown > 0
+                      ? `Resend in ${resendCountdown}s`
+                      : codeSent
+                        ? "Resend Phone OTP"
+                        : "Send Phone OTP"}
                 </button>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-semibold text-stone-600">WhatsApp code</span>
+                  <span className="text-sm font-semibold text-stone-600">Phone OTP</span>
                   <input
-                    value={whatsappCode}
-                    onChange={(event) => setWhatsappCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                    value={phoneCode}
+                    onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
                     inputMode="numeric"
+                    autoComplete="one-time-code"
                     placeholder="Enter 6-digit code"
                     className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
                   />
@@ -239,7 +284,9 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
                     <input
                       value={pin}
                       onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      type="password"
                       inputMode="numeric"
+                      autoComplete="new-password"
                       placeholder="******"
                       className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
                     />
@@ -249,7 +296,9 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
                     <input
                       value={confirmPin}
                       onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      type="password"
                       inputMode="numeric"
+                      autoComplete="new-password"
                       placeholder="******"
                       className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
                     />
@@ -264,6 +313,7 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
                     value={identifier}
                     onChange={(event) => setIdentifier(event.target.value)}
                     type="text"
+                    autoComplete="username"
                     placeholder="you@example.com or +2348000000000"
                     className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
                   />
@@ -274,11 +324,17 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
                   <input
                     value={pin}
                     onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                    type="password"
                     inputMode="numeric"
+                    autoComplete="current-password"
                     placeholder="******"
                     className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
                   />
                 </label>
+
+                <div className="text-right text-sm text-on-surface-variant">
+                  Forgot your PIN? <a href={`tel:${SUPPORT_PHONE}`} className="font-semibold text-primary">Contact support</a>
+                </div>
               </>
             )}
 
@@ -311,6 +367,7 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
               </Link>
             </div>
           </div>
+          <div id="firebase-phone-recaptcha" />
         </div>
       </div>
     </div>

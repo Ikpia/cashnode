@@ -5,6 +5,7 @@ import { AgentLivePresencePanel } from "@/components/agent-live-presence-panel";
 import { AppShell } from "@/components/app-shell";
 import { Icon } from "@/components/ui/icon";
 import { requireUserRole } from "@/lib/auth-session";
+import { getAutomaticSettlementUnavailableReason } from "@/lib/paystack";
 import {
   acceptPayoutRequest,
   completePayoutRequest,
@@ -92,12 +93,17 @@ export default async function AgentDashboardPage({
   const withdrawableAmountNgn = withdrawableRequests.reduce((sum, request) => sum + (request.settlement?.amountNgn ?? 0), 0);
   const processingAmountNgn = processingWithdrawalRequests.reduce((sum, request) => sum + (request.settlement?.amountNgn ?? 0), 0);
   const settledCount = completedAssignments.filter((request) => request.settlement?.status === "transfer_success").length;
+  const manualQueueRequests = completedAssignments.filter((request) => request.settlement?.status === "withdrawal_requested");
+  const manualQueueAmountNgn = manualQueueRequests.reduce((sum, request) => sum + (request.settlement?.amountNgn ?? 0), 0);
+  const automaticSettlementUnavailableReason = getAutomaticSettlementUnavailableReason();
+  const focusRequest = activeAssignments[0] ?? completedAssignments[0] ?? null;
   const earnings = completedAssignments.reduce((sum, request) => sum + request.agentFeeToken, 0);
   const averageSpeedMinutes = activeAssignments.length > 0 ? 12 : 0;
   const welcomeGreeting = getWelcomeGreeting(user, "Welcome back.");
   const settlementDestination = user.agentProfile?.settlementAccountNumber
     ? `${user.agentProfile.settlementAccountName ?? "Settlement account"} · ${user.agentProfile.settlementAccountNumber}`
     : "Complete agent onboarding to add a settlement account.";
+  const withdrawActionLabel = automaticSettlementUnavailableReason ? "Request manual payout" : "Withdraw now";
 
   async function acceptRequestAction(formData: FormData) {
     "use server";
@@ -154,24 +160,27 @@ export default async function AgentDashboardPage({
     "use server";
 
     const agent = await requireUserRole("agent");
-    try {
-      const withdrawnRequests = await withdrawAgentSettlements({ agentUser: agent });
-      const queuedManually = withdrawnRequests.some((request) => request.settlement?.status === "withdrawal_requested");
+    let withdrawnRequests: Awaited<ReturnType<typeof withdrawAgentSettlements>>;
 
-      revalidatePath("/agent-dashboard");
-      revalidatePath("/request-detail");
-      revalidatePath("/payout-confirmation");
-      redirect(
-        `/agent-dashboard?success=${encodeURIComponent(
-          queuedManually
-            ? `Withdrawal request queued for manual processing for ${withdrawnRequests.length} payout${withdrawnRequests.length === 1 ? "" : "s"}.`
-            : `Withdrawal submitted for ${withdrawnRequests.length} payout${withdrawnRequests.length === 1 ? "" : "s"}.`
-        )}`
-      );
+    try {
+      withdrawnRequests = await withdrawAgentSettlements({ agentUser: agent });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to withdraw your payout balance right now.";
       redirect(`/agent-dashboard?error=${encodeURIComponent(message)}`);
     }
+
+    const queuedManually = withdrawnRequests.some((request) => request.settlement?.status === "withdrawal_requested");
+
+    revalidatePath("/agent-dashboard");
+    revalidatePath("/request-detail");
+    revalidatePath("/payout-confirmation");
+    redirect(
+      `/agent-dashboard?success=${encodeURIComponent(
+        queuedManually
+          ? `Withdrawal request queued for manual processing for ${withdrawnRequests.length} payout${withdrawnRequests.length === 1 ? "" : "s"}.`
+          : `Withdrawal submitted for ${withdrawnRequests.length} payout${withdrawnRequests.length === 1 ? "" : "s"}.`
+      )}`
+    );
   }
 
   return (
@@ -191,6 +200,13 @@ export default async function AgentDashboardPage({
       {actionSuccess ? (
         <div className="mb-8 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
           <strong className="font-semibold">Withdrawal update: </strong>{actionSuccess}
+        </div>
+      ) : null}
+
+      {user.agentProfile?.manualReviewRequired ? (
+        <div className="mb-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <strong className="font-semibold">POS account pending approval: </strong>
+          Admin review is required before this agent can accept payout requests.
         </div>
       ) : null}
 
@@ -228,13 +244,26 @@ export default async function AgentDashboardPage({
               <div className="mt-4 rounded-xl bg-surface-container-low p-4 text-sm text-on-surface-variant">
                 <div className="font-semibold text-on-surface">Destination</div>
                 <div className="mt-1">{settlementDestination}</div>
-                <div className="mt-2">{withdrawableRequests.length} payout{withdrawableRequests.length === 1 ? "" : "s"} ready</div>
+                <div className="mt-2">
+                  {withdrawableRequests.length} payout{withdrawableRequests.length === 1 ? "" : "s"}{" "}
+                  {automaticSettlementUnavailableReason ? "ready for manual payout review" : "ready"}
+                </div>
                 {processingWithdrawalRequests.length > 0 ? (
                   <div className="mt-2 text-primary">
                     {processingWithdrawalRequests.length} payout{processingWithdrawalRequests.length === 1 ? "" : "s"} processing · {formatNgn(processingAmountNgn)}
                   </div>
                 ) : null}
               </div>
+              {automaticSettlementUnavailableReason ? (
+                <div className="mt-4 rounded-xl border border-primary/10 bg-primary/5 p-4 text-sm text-on-surface-variant">
+                  Paystack still verifies your bank details during onboarding, but automatic transfers are not enabled for this deployment yet. Withdraw requests will be queued for manual payout ops.
+                </div>
+              ) : null}
+              {manualQueueRequests.length > 0 ? (
+                <div className="mt-4 rounded-xl border border-primary/10 bg-primary/5 p-4 text-sm text-on-surface-variant">
+                  Manual queue active for {manualQueueRequests.length} payout{manualQueueRequests.length === 1 ? "" : "s"} · {formatNgn(manualQueueAmountNgn)}. Your reimbursement is safe while payout ops completes the transfer.
+                </div>
+              ) : null}
               <div className="mt-8 flex gap-3">
                 <Link href="/onboarding/agent" className="flex-1 rounded-xl bg-surface-container px-5 py-3 text-center text-sm font-semibold text-on-surface">
                   Update payout bank
@@ -245,7 +274,7 @@ export default async function AgentDashboardPage({
                     disabled={withdrawableAmountNgn <= 0}
                     className="w-full rounded-xl bg-primary px-5 py-3 text-center text-sm font-semibold text-white shadow-md disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    Withdraw now
+                    {withdrawActionLabel}
                   </button>
                 </form>
               </div>
@@ -254,14 +283,14 @@ export default async function AgentDashboardPage({
 
           <section>
             <div className="mb-6 flex items-center justify-between">
-              <h2 className="font-display text-headline-md text-on-surface">Overflow Requests</h2>
+              <h2 className="font-display text-headline-md text-on-surface">Incoming Requests</h2>
               <div className="text-sm font-semibold text-on-surface-variant">{availableRequests.length} open</div>
             </div>
 
             <div className="space-y-4">
               {availableRequests.length === 0 ? (
                 <div className="page-card p-6 text-sm text-on-surface-variant">
-                  No unmatched requests are available right now. Stay live to receive nearby auto-matches and to see any overflow requests that still need claiming.
+                  No requests are available right now. New payout requests for your pickup area will appear here for you to accept.
                 </div>
               ) : (
                 availableRequests.map((request) => (
@@ -348,6 +377,7 @@ export default async function AgentDashboardPage({
               ) : (
                 activeAssignments.map((request) => {
                   const meta = statusMeta(request.status);
+                  const awaitingReceiverConfirmation = Boolean(request.agentMarkedPaidAt);
 
                   return (
                     <div key={request.id} className="rounded-r-xl border-l-4 border-primary bg-surface-container-lowest p-4">
@@ -378,8 +408,14 @@ export default async function AgentDashboardPage({
                         </form>
                         <form action={completeRequestAction} className="flex-1">
                           <input type="hidden" name="requestId" value={request.id} />
-                          <button type="submit" className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white">
-                            Mark paid
+                          <button
+                            type="submit"
+                            disabled={awaitingReceiverConfirmation}
+                            className={`w-full rounded-xl px-4 py-3 text-sm font-semibold text-white ${
+                              awaitingReceiverConfirmation ? "cursor-not-allowed bg-primary/50" : "bg-primary"
+                            }`}
+                          >
+                            {awaitingReceiverConfirmation ? "Awaiting receiver" : "Mark paid"}
                           </button>
                         </form>
                       </div>

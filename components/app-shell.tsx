@@ -9,9 +9,10 @@ type MobileNavKey = "home" | "wallet" | "activity" | "profile";
 
 type AppShellProps = {
   children: ReactNode;
-  activeNav: DesktopNavKey;
-  mobileActive: MobileNavKey;
+  activeNav?: DesktopNavKey;
+  mobileActive?: MobileNavKey;
   showAvatar?: boolean;
+  showWalletControls?: boolean;
   showMobileLabels?: boolean;
   mainClassName?: string;
   mobileProfileHref?: string;
@@ -19,11 +20,9 @@ type AppShellProps = {
 
 const desktopLinks = [
   { key: "home" as const, label: "Home", href: "/" },
-  { key: "sender" as const, label: "Sender", href: "/sender-dashboard" },
-  { key: "agent" as const, label: "Agent", href: "/agent-dashboard" },
-  { key: "receiver" as const, label: "Receiver", href: "/receiver-portal" },
-  { key: "request" as const, label: "Request", href: "/request-detail" },
-  { key: "payout" as const, label: "Payout", href: "/payout-confirmation" }
+  { key: "sender" as const, label: "Send", href: "/sender-dashboard" },
+  { key: "receiver" as const, label: "Receive", href: "/receiver-portal" },
+  { key: "agent" as const, label: "Agent", href: "/agent-dashboard" }
 ];
 
 export function AppShell({
@@ -31,13 +30,14 @@ export function AppShell({
   activeNav,
   mobileActive,
   showAvatar = false,
+  showWalletControls = false,
   showMobileLabels = false,
   mainClassName = "",
   mobileProfileHref = "/agent-dashboard"
 }: AppShellProps) {
   const mobileLinks = [
     { key: "home" as const, label: "Home", icon: "home_app_logo", href: "/" },
-    { key: "wallet" as const, label: "Wallet", icon: "account_balance_wallet", href: "/payout-confirmation" },
+    { key: "wallet" as const, label: "Pickup", icon: "payments", href: "/payout-confirmation" },
     { key: "activity" as const, label: "Activity", icon: "receipt_long", href: "/request-detail" },
     { key: "profile" as const, label: "Profile", icon: "person", href: mobileProfileHref }
   ];
@@ -71,7 +71,7 @@ export function AppShell({
 
           <div className="flex items-center gap-3">
             <AuthControls />
-            <WalletControls showAvatar={showAvatar} />
+            {showWalletControls ? <WalletControls showAvatar={showAvatar} /> : null}
           </div>
         </div>
       </header>
@@ -82,17 +82,17 @@ export function AppShell({
         <div className="mx-auto flex w-full max-w-shell flex-col items-center justify-between gap-6 px-8 py-12 text-sm text-stone-500 md:flex-row">
           <div className="flex flex-col gap-2 md:items-start">
             <div className="font-display text-lg font-bold text-stone-900">CashNode</div>
-            <p>Building the physical liquidity layer for a digital world. Secure, fast, and local.</p>
+            <p>Cross-border cash pickup with clear pricing, trusted agents, and faster local access.</p>
           </div>
 
           <div className="flex flex-wrap justify-center gap-6">
-            <a href="#">Security</a>
-            <a href="#">Terms of Service</a>
-            <a href="#">Privacy Policy</a>
-            <a href="#">Contact Support</a>
+            <Link href="/security">Security</Link>
+            <Link href="/terms">Terms</Link>
+            <Link href="/privacy">Privacy</Link>
+            <Link href="/support">Support</Link>
           </div>
 
-          <div>(c) 2026 CashNode Private Banking. All rights reserved.</div>
+          <div>(c) 2026 CashNode. All rights reserved.</div>
         </div>
       </footer>
 

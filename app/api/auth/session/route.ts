@@ -8,7 +8,7 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_EXPIRES_IN_MS
 } from "@/lib/auth-session";
-import { authenticateWithPin, signupWithWhatsAppPin } from "@/lib/local-auth";
+import { authenticateWithPin, signupWithFirebasePhonePin } from "@/lib/local-auth";
 import { getUserFirstName } from "@/lib/user-greeting";
 
 export const runtime = "nodejs";
@@ -18,7 +18,7 @@ type SignupBody = {
   fullName?: string;
   email?: string;
   phoneNumber?: string;
-  whatsappCode?: string;
+  firebaseIdToken?: string;
   pin?: string;
 };
 
@@ -55,11 +55,11 @@ export async function POST(request: Request) {
 
     const user =
       body.action === "signup"
-        ? await signupWithWhatsAppPin({
+        ? await signupWithFirebasePhonePin({
             fullName: body.fullName,
             email: body.email,
             phoneNumber: body.phoneNumber,
-            whatsappCode: body.whatsappCode,
+            firebaseIdToken: body.firebaseIdToken,
             pin: body.pin
           })
         : await authenticateWithPin({
@@ -69,7 +69,6 @@ export async function POST(request: Request) {
     const sessionToken = await createSessionForUser(user.id);
     const response = NextResponse.json({
       authenticated: true,
-      token: sessionToken,
       user: {
         ...user,
         firstName: getUserFirstName(user)

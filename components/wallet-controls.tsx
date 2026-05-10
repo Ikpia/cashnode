@@ -28,7 +28,11 @@ export function WalletControls({ showAvatar = false }: { showAvatar?: boolean })
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => void handleClick()}
+          onClick={() => {
+            handleClick().catch(() => {
+              // WalletProvider stores the user-facing error text.
+            });
+          }}
           className={`rounded-full px-6 py-2.5 text-sm font-semibold shadow-md transition-opacity hover:opacity-90 ${
             status === "connected" ? "border border-primary/15 bg-white text-primary" : "bg-primary text-white"
           }`}

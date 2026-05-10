@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Connection, Transaction } from "@solana/web3.js";
 import { formatWalletAddress, getBrowserWalletProvider } from "@/lib/solana-wallet";
 
 type WalletStatus = "idle" | "connecting" | "connected" | "unsupported" | "error";
@@ -11,8 +12,9 @@ type WalletContextValue = {
   shortAddress: string;
   hasProvider: boolean;
   helperText: string;
-  connectWallet: () => Promise<void>;
+  connectWallet: () => Promise<string>;
   disconnectWallet: () => Promise<void>;
+  signAndSendTransaction: (transactionBase64: string, rpcUrl: string) => Promise<string>;
 };
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -86,7 +88,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setStatus("unsupported");
       setHelperText("Phantom was not found. Install it to connect your wallet.");
       window.open("https://phantom.app/download", "_blank", "noopener,noreferrer");
-      return;
+      throw new Error("Phantom was not found. Install it to connect your wallet.");
     }
 
     setHasProvider(true);
@@ -105,9 +107,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setStatus("connected");
       setHelperText("Wallet connected.");
       window.localStorage.setItem(walletStorageKey, nextAddress);
+      return nextAddress;
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to connect wallet.";
       setStatus("error");
-      setHelperText(error instanceof Error ? error.message : "Unable to connect wallet.");
+      setHelperText(message);
+      throw new Error(message);
     }
   };
 
@@ -134,6 +139,42 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     window.localStorage.removeItem(walletStorageKey);
   };
 
+  const signAndSendTransaction = async (transactionBase64: string, rpcUrl: string) => {
+    const provider = getBrowserWalletProvider();
+
+    if (!provider) {
+      throw new Error("Connect Phantom before signing this escrow transaction.");
+    }
+
+    if (!publicKey) {
+      await connectWallet();
+    }
+
+    const transactionBytes = Uint8Array.from(window.atob(transactionBase64), (character) => character.charCodeAt(0));
+    const transaction = Transaction.from(transactionBytes);
+
+    if (provider.signAndSendTransaction) {
+      const result = await provider.signAndSendTransaction(transaction);
+      const signature = typeof result === "string" ? result : result.signature;
+
+      if (!signature) {
+        throw new Error("Transaction was sent but no signature was returned.");
+      }
+
+      return signature;
+    }
+
+    if (!provider.signTransaction) {
+      throw new Error("This wallet does not support Solana transaction signing.");
+    }
+
+    const signedTransaction = (await provider.signTransaction(transaction)) as Transaction;
+    const connection = new Connection(rpcUrl, "confirmed");
+    return connection.sendRawTransaction(signedTransaction.serialize(), {
+      skipPreflight: false
+    });
+  };
+
   const value = useMemo(
     () => ({
       status,
@@ -142,7 +183,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       hasProvider,
       helperText,
       connectWallet,
-      disconnectWallet
+      disconnectWallet,
+      signAndSendTransaction
     }),
     [status, publicKey, hasProvider, helperText]
   );
