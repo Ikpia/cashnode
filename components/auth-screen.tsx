@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "firebase/auth";
+import { BrandLogo } from "@/components/brand-logo";
 import { getFriendlyFirebaseAuthMessage } from "@/lib/firebase-auth-messages";
 import { getFirebaseClientAuth } from "@/lib/firebase-client";
 
@@ -193,10 +194,11 @@ export default function AuthScreen({ mode = "signin" }: { mode?: AuthMode }) {
   return (
     <div className="min-h-screen bg-background px-4 py-8 sm:px-6 md:px-8">
       <div className="mx-auto max-w-xl">
-        <div className="mb-5">
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <BrandLogo size="sm" />
           <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold text-on-surface-variant transition-colors hover:text-primary">
             <span aria-hidden="true">&larr;</span>
-            Back to landing page
+            Back
           </Link>
         </div>
 

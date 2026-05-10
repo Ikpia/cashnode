@@ -18,7 +18,11 @@ const plusJakarta = Plus_Jakarta_Sans({
 
 export const metadata: Metadata = {
   title: "CashNode",
-  description: "Premium fintech interface for the CashNode payout network."
+  description: "Premium fintech interface for the CashNode payout network.",
+  icons: {
+    icon: "/cashnode-logo.svg",
+    apple: "/cashnode-logo.png"
+  }
 };
 
 export default function RootLayout({

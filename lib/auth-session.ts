@@ -1,10 +1,13 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { clearLocalSession, createLocalSession, getUserFromLocalSession } from "@/lib/local-auth";
 import { type AppUser, type OnboardingStatus, type UserRole } from "@/lib/users";
 
 export const SESSION_COOKIE_NAME = "cashnode_session";
+export const ADMIN_ACCESS_COOKIE_NAME = "cashnode_admin_access";
 export const SESSION_EXPIRES_IN_MS = 1000 * 60 * 60 * 24 * 5;
+export const ADMIN_ACCESS_EXPIRES_IN_MS = 1000 * 60 * 60 * 8;
 
 export function getRoleHomePath(role: UserRole) {
   if (role === "agent") {
@@ -50,6 +53,69 @@ export function isAdminUser(user: Pick<AppUser, "id" | "phoneNumber">) {
   const userPhoneNumber = normalizePhoneForAdminCheck(user.phoneNumber);
 
   return adminUserIds.includes(user.id) || Boolean(userPhoneNumber && adminPhoneNumbers.includes(userPhoneNumber));
+}
+
+function getAdminAccessKey() {
+  return process.env.CASHNODE_ADMIN_ACCESS_KEY?.trim() || process.env.CASHNODE_ADMIN_KEY?.trim() || "";
+}
+
+function getAdminAccessToken() {
+  const adminAccessKey = getAdminAccessKey();
+
+  if (!adminAccessKey) {
+    return "";
+  }
+
+  return createHmac("sha256", adminAccessKey).update("cashnode-admin-access:v1").digest("hex");
+}
+
+function safeEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export function isAdminAccessKeyConfigured() {
+  return Boolean(getAdminAccessKey());
+}
+
+export async function hasAdminKeyAccess() {
+  const expectedToken = getAdminAccessToken();
+
+  if (!expectedToken) {
+    return false;
+  }
+
+  const cookieStore = await cookies();
+  const adminAccessToken = cookieStore.get(ADMIN_ACCESS_COOKIE_NAME)?.value ?? "";
+  return Boolean(adminAccessToken && safeEqual(adminAccessToken, expectedToken));
+}
+
+export async function hasAdminAccess(user: Pick<AppUser, "id" | "phoneNumber">) {
+  return isAdminUser(user) || (await hasAdminKeyAccess());
+}
+
+export async function grantAdminKeyAccess(adminKeyInput: unknown) {
+  const expectedKey = getAdminAccessKey();
+  const adminKey = typeof adminKeyInput === "string" ? adminKeyInput.trim() : "";
+
+  if (!expectedKey) {
+    throw new Error("Admin key access is not configured.");
+  }
+
+  if (!adminKey || !safeEqual(adminKey, expectedKey)) {
+    throw new Error("Invalid admin key.");
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set(ADMIN_ACCESS_COOKIE_NAME, getAdminAccessToken(), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/admin",
+    maxAge: Math.floor(ADMIN_ACCESS_EXPIRES_IN_MS / 1000)
+  });
 }
 
 export async function getCurrentSessionUser(): Promise<AppUser | null> {
@@ -102,7 +168,7 @@ export async function requireSignedInUser() {
 export async function requireAdminUser() {
   const sessionUser = await requireSignedInUser();
 
-  if (!isAdminUser(sessionUser)) {
+  if (!(await hasAdminAccess(sessionUser))) {
     redirect("/dashboard");
   }
 

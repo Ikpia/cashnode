@@ -1,0 +1,14 @@
+﻿<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="1024" rx="224" fill="#F7F3E8"/>
+  <circle cx="512" cy="512" r="326" fill="#007A4D"/>
+  <circle cx="512" cy="512" r="274" fill="#F7F3E8"/>
+  <path d="M512 246C579 315 615 382 615 448C615 514 570 562 512 562C454 562 409 514 409 448C409 382 445 315 512 246Z" fill="#007A4D"/>
+  <path d="M314 511C403 521 468 559 502 622C536 685 518 752 463 782C408 812 342 787 309 724C275 660 277 589 314 511Z" fill="#007A4D"/>
+  <path d="M710 511C621 521 556 559 522 622C488 685 506 752 561 782C616 812 682 787 715 724C749 660 747 589 710 511Z" fill="#007A4D"/>
+  <path d="M512 356V739" stroke="#F7F3E8" stroke-width="42" stroke-linecap="round"/>
+  <path d="M383 590C430 604 472 637 512 687C552 637 594 604 641 590" stroke="#F7F3E8" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M323 308L380 365" stroke="#F4B400" stroke-width="38" stroke-linecap="round"/>
+  <path d="M701 308L644 365" stroke="#F4B400" stroke-width="38" stroke-linecap="round"/>
+  <path d="M512 157V237" stroke="#F4B400" stroke-width="38" stroke-linecap="round"/>
+  <text x="512" y="910" text-anchor="middle" fill="#007A4D" font-family="Verdana, Arial, sans-serif" font-size="92" font-weight="800">CashNode</text>
+</svg>

@@ -83,6 +83,7 @@ export function SenderPayoutForm({ initialError = "" }: { initialError?: string 
   const [message, setMessage] = useState(initialError);
   const [messageTone, setMessageTone] = useState<"error" | "success" | "info">(initialError ? "error" : "info");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isMintingTestUsdt, setIsMintingTestUsdt] = useState(false);
 
   const showMessage = (nextMessage: string, tone: "error" | "success" | "info" = "info") => {
     setMessage(nextMessage);
@@ -103,6 +104,46 @@ export function SenderPayoutForm({ initialError = "" }: { initialError?: string 
     return payload as EscrowQuote;
   };
 
+  const mintTestUsdt = async () => {
+    setIsMintingTestUsdt(true);
+    showMessage("Preparing test USDT mint for your connected wallet...", "info");
+
+    try {
+      const walletAddress = publicKey || (await connectWallet());
+
+      if (!walletAddress) {
+        throw new Error("Connect your Solana wallet before minting test USDT.");
+      }
+
+      const response = await authFetch("/api/payout-requests/escrow/test-mint", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          walletAddress,
+          tokenAmount: 1000
+        })
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Unable to mint test USDT.");
+      }
+
+      const signature =
+        typeof payload.signature === "string" && payload.signature
+          ? payload.signature
+          : await signAndSendTransaction(payload.transactionBase64, payload.rpcUrl);
+
+      showMessage(`Minted ${formatUsdt(Number(payload.tokenAmount ?? 1000))} for testing. Signature: ${signature}`, "success");
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "Unable to mint test USDT.", "error");
+    } finally {
+      setIsMintingTestUsdt(false);
+    }
+  };
+
   const ensureWalletCanFund = async (quote: EscrowQuote) => {
     let walletAddress = publicKey;
 
@@ -116,6 +157,7 @@ export function SenderPayoutForm({ initialError = "" }: { initialError?: string 
 
     const connection = new Connection(quote.rpcUrl, "confirmed");
     const walletPublicKey = new PublicKey(walletAddress);
+
     const tokenMint = new PublicKey(quote.tokenMint);
     const senderTokenAccount = getAssociatedTokenAddressSync(tokenMint, walletPublicKey, true, TOKEN_PROGRAM_ID);
     const tokenBalance = await connection
@@ -237,15 +279,18 @@ export function SenderPayoutForm({ initialError = "" }: { initialError?: string 
           createdAt: new Date().toISOString()
         })
       );
-      await recordEscrowSignatureWithRetry({
-        requestId: createdRequestId,
-        action: "create",
-        signature,
-        walletAddress,
-        escrowAddress: transactionPayload.transaction.escrowAddress,
-        referenceSeed: transactionPayload.transaction.referenceSeedHex
-      });
-      window.localStorage.removeItem("cashnode_pending_escrow_record");
+      try {
+        await recordEscrowSignatureWithRetry({
+          requestId: createdRequestId,
+          action: "create",
+          signature,
+          walletAddress,
+          escrowAddress: transactionPayload.transaction.escrowAddress,
+          referenceSeed: transactionPayload.transaction.referenceSeedHex
+        });
+      } finally {
+        window.localStorage.removeItem("cashnode_pending_escrow_record");
+      }
 
       showMessage("Funds secured. Redirecting to tracking...", "success");
       router.push(`/request-detail?id=${createdRequestId}`);
@@ -324,6 +369,17 @@ export function SenderPayoutForm({ initialError = "" }: { initialError?: string 
           >
             {status === "connecting" ? "Connecting..." : publicKey ? "Change wallet" : "Connect wallet"}
           </button>
+          <button
+            type="button"
+            onClick={() => void mintTestUsdt()}
+            disabled={isMintingTestUsdt || status === "connecting"}
+            className="ml-2 mt-3 rounded-xl border border-emerald-700/15 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isMintingTestUsdt ? "Minting..." : "Mint 1,000 test USDT"}
+          </button>
+          <p className="mt-3 text-xs leading-5 text-on-surface-variant">
+            For devnet testing. If your connected wallet is not the mint authority, configure the backend faucet key so any tester can mint.
+          </p>
         </div>
       </div>
 

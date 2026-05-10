@@ -7,7 +7,7 @@ import { sendWhatsAppVerificationCode as sendWhatsAppProviderVerificationCode } 
 
 type AuthCredentialDocument = {
   userId: ObjectId;
-  email: string;
+  email?: string;
   phoneNumber: string;
   pinHash: string;
   pinSalt: string;
@@ -68,6 +68,26 @@ function normalizePhoneNumber(value: unknown) {
   }
 
   return phoneNumber;
+}
+
+function normalizeLoginPhoneNumber(value: string) {
+  const trimmed = value.trim();
+
+  if (trimmed.startsWith("+")) {
+    return normalizePhoneNumber(trimmed);
+  }
+
+  const digitsOnly = trimmed.replace(/\D/g, "");
+
+  if (/^0\d{10}$/.test(digitsOnly)) {
+    return `+234${digitsOnly.slice(1)}`;
+  }
+
+  if (/^234\d{10}$/.test(digitsOnly)) {
+    return `+${digitsOnly}`;
+  }
+
+  return normalizePhoneNumber(trimmed);
 }
 
 function ensurePin(value: unknown) {
@@ -274,6 +294,7 @@ export async function signupWithWhatsAppPin(input: {
   });
   const user = await updateUserProfile({
     userId: baseUser.id,
+    email,
     displayName: fullName,
     onboardingStatus: "active"
   });
@@ -344,6 +365,7 @@ export async function signupWithFirebasePhonePin(input: {
   });
   const user = await updateUserProfile({
     userId: baseUser.id,
+    email,
     displayName: fullName,
     onboardingStatus: "active"
   });
@@ -374,11 +396,20 @@ export async function authenticateWithPin(input: { identifier: unknown; pin: unk
 
   const pin = ensurePin(input.pin);
   const { credentials, db } = await getCollections();
-  const credential = await credentials.findOne(
-    identifier.includes("@")
-      ? { email: normalizeEmail(identifier) }
-      : { phoneNumber: normalizePhoneNumber(identifier) }
-  );
+  let credential = identifier.includes("@")
+    ? await credentials.findOne({ email: normalizeEmail(identifier) })
+    : await credentials.findOne({ phoneNumber: normalizeLoginPhoneNumber(identifier) });
+
+  if (!credential && identifier.includes("@")) {
+    const user = await db.collection("users").findOne(
+      { email: normalizeEmail(identifier) },
+      { projection: { _id: 1 } }
+    );
+
+    if (user?._id instanceof ObjectId) {
+      credential = await credentials.findOne({ userId: user._id });
+    }
+  }
 
   if (!credential || !matchesSecret(pin, credential.pinSalt, credential.pinHash)) {
     throw new Error("Invalid credentials.");

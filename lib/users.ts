@@ -56,6 +56,7 @@ export type AgentProfileInput = {
 
 type UserDocument = {
   firebaseUid: string;
+  email?: string;
   phoneNumber: string;
   role: UserRole;
   onboardingStatus: OnboardingStatus;
@@ -95,6 +96,7 @@ export type AppAgentProfile = {
 export type AppUser = {
   id: string;
   firebaseUid: string;
+  email: string | null;
   phoneNumber: string;
   role: UserRole;
   onboardingStatus: OnboardingStatus;
@@ -170,6 +172,7 @@ function toAppUser(document: WithId<UserDocument>): AppUser {
   return {
     id: document._id.toHexString(),
     firebaseUid: document.firebaseUid,
+    email: document.email ?? null,
     phoneNumber: document.phoneNumber,
     role: document.role,
     onboardingStatus: document.onboardingStatus,
@@ -458,6 +461,7 @@ export async function upsertUserFromFirebaseLogin(input: {
 
 export async function updateUserProfile(input: {
   userId: string;
+  email?: string;
   displayName?: string;
   walletAddress?: string | null;
   onboardingStatus?: OnboardingStatus;
@@ -476,6 +480,10 @@ export async function updateUserProfile(input: {
     typeof input.displayName === "string" && input.displayName.trim()
       ? input.displayName.trim()
       : document.displayName ?? "";
+  const nextEmail =
+    typeof input.email === "string" && input.email.trim()
+      ? input.email.trim().toLowerCase()
+      : document.email;
   const nextWalletAddress =
     input.walletAddress === undefined ? document.walletAddress : input.walletAddress?.trim() || undefined;
   const nextOnboardingStatus =
@@ -492,6 +500,7 @@ export async function updateUserProfile(input: {
     {
       $set: {
         displayName: nextDisplayName,
+        ...(nextEmail ? { email: nextEmail } : {}),
         walletAddress: nextWalletAddress,
         onboardingStatus: nextOnboardingStatus,
         ...(nextAgentProfile ? { agentProfile: nextAgentProfile } : {}),

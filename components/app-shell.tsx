@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { AuthControls } from "@/components/auth-controls";
+import { BrandLogo } from "@/components/brand-logo";
 import { Icon } from "@/components/ui/icon";
 import { WalletControls } from "@/components/wallet-controls";
 
@@ -46,9 +47,7 @@ export function AppShell({
     <div className="relative min-h-screen overflow-x-clip">
       <header className="sticky top-0 z-50 hidden border-b border-stone-200 bg-[#faf9f6]/80 shadow-sm backdrop-blur-xl md:block">
         <div className="mx-auto flex w-full max-w-shell items-center justify-between px-8 py-4">
-          <Link href="/" className="font-display text-[2rem] font-bold tracking-tight text-primary">
-            CashNode
-          </Link>
+          <BrandLogo size="lg" />
 
           <nav className="flex items-center gap-8">
             {desktopLinks.map((link) => {
@@ -81,7 +80,7 @@ export function AppShell({
       <footer className="mt-24 hidden border-t border-stone-200 bg-[#faf9f6] md:block">
         <div className="mx-auto flex w-full max-w-shell flex-col items-center justify-between gap-6 px-8 py-12 text-sm text-stone-500 md:flex-row">
           <div className="flex flex-col gap-2 md:items-start">
-            <div className="font-display text-lg font-bold text-stone-900">CashNode</div>
+            <BrandLogo size="sm" className="pointer-events-auto" />
             <p>Cross-border cash pickup with clear pricing, trusted agents, and faster local access.</p>
           </div>
 

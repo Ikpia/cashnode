@@ -2,6 +2,7 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { EscrowControls } from "@/components/escrow-controls";
 import { PickupMapEmbed } from "@/components/pickup-map-embed";
 import { Icon } from "@/components/ui/icon";
 import { hasAgentCapability } from "@/lib/agent-capability";
@@ -189,6 +190,10 @@ export default async function RequestDetailPage({
       request.escrow.status === "pending_signature" ||
       request.escrow.status === "failed" ||
       request.escrow.status === "cancelled");
+  const canCancelEscrow =
+    request.senderUserId === user.id &&
+    request.status === "open" &&
+    request.escrow?.status === "funded";
   const canComplete =
     request.status === "accepted" && request.receiverPhone === user.phoneNumber;
   const canDecline = request.status === "accepted" && hasAgentCapability(user) && request.assignedAgent?.userId === user.id;
@@ -373,6 +378,17 @@ export default async function RequestDetailPage({
               </div>
             ) : null}
           </div>
+
+          {canCancelEscrow ? (
+            <EscrowControls
+              request={request}
+              canCreate={false}
+              canAccept={false}
+              canMarkPaid={false}
+              canComplete={false}
+              canCancel
+            />
+          ) : null}
 
           <div className="flex flex-wrap gap-3">
             {canAccept ? (

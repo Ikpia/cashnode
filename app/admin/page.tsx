@@ -3,7 +3,13 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { AdminSubmitButton } from "@/components/admin-submit-button";
 import { Icon } from "@/components/ui/icon";
-import { requireAdminUser } from "@/lib/auth-session";
+import {
+  grantAdminKeyAccess,
+  hasAdminAccess,
+  isAdminAccessKeyConfigured,
+  requireAdminUser,
+  requireSignedInUser
+} from "@/lib/auth-session";
 import { listPaystackNigerianBanks } from "@/lib/paystack";
 import {
   listAdminPayoutRequests,
@@ -113,13 +119,99 @@ function EmptyState({ children }: { children: string }) {
   );
 }
 
+async function adminKeyAction(formData: FormData) {
+  "use server";
+
+  await requireSignedInUser();
+
+  try {
+    await grantAdminKeyAccess(String(formData.get("adminKey") ?? ""));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to unlock admin access.";
+    redirect(`/admin?error=${encodeURIComponent(message)}`);
+  }
+
+  redirect(`/admin?success=${encodeURIComponent("Admin access unlocked.")}`);
+}
+
+function AdminAccessGate({
+  error,
+  success,
+  isConfigured
+}: {
+  error?: string;
+  success?: string;
+  isConfigured: boolean;
+}) {
+  return (
+    <AppShell mainClassName="grid min-h-[calc(100vh-7rem)] place-items-center px-4 py-10">
+      <section className="w-full max-w-xl overflow-hidden rounded-[2rem] border border-stone-200 bg-white shadow-[0_24px_80px_rgba(20,37,31,0.14)]">
+        <div className="bg-[#14251f] p-7 text-white">
+          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-[#d8f7a5]">Admin verification</p>
+          <h1 className="mt-3 font-display text-4xl font-bold tracking-[-0.05em]">Enter admin key</h1>
+          <p className="mt-3 text-sm leading-6 text-white/72">
+            Your signed-in phone number is not on the admin allowlist. Enter the shared admin key to continue.
+          </p>
+        </div>
+
+        <div className="space-y-4 p-7">
+          {error ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
+
+          {success ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {success}
+            </div>
+          ) : null}
+
+          {isConfigured ? (
+            <form action={adminKeyAction} className="space-y-4">
+              <label className="block space-y-2">
+                <span className="text-sm font-semibold text-stone-600">Admin key</span>
+                <input
+                  name="adminKey"
+                  type="password"
+                  required
+                  placeholder="Enter admin access key"
+                  className="w-full rounded-xl border border-stone-200 px-4 py-3 outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+                />
+              </label>
+              <AdminSubmitButton className="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-md">
+                Unlock admin dashboard
+              </AdminSubmitButton>
+            </form>
+          ) : (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Admin key access is not configured. Add <code>CASHNODE_ADMIN_ACCESS_KEY</code> to your environment.
+            </div>
+          )}
+        </div>
+      </section>
+    </AppShell>
+  );
+}
+
 export default async function AdminPage({
   searchParams
 }: {
   searchParams?: Promise<{ error?: string; success?: string }>;
 }) {
-  await requireAdminUser();
+  const currentUser = await requireSignedInUser();
   const resolvedSearchParams = (await searchParams) ?? {};
+
+  if (!(await hasAdminAccess(currentUser))) {
+    return (
+      <AdminAccessGate
+        error={resolvedSearchParams.error}
+        success={resolvedSearchParams.success}
+        isConfigured={isAdminAccessKeyConfigured()}
+      />
+    );
+  }
+
   const [users, payoutRequests, banks] = await Promise.all([
     listAdminUsers(),
     listAdminPayoutRequests(),

@@ -152,24 +152,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     const transactionBytes = Uint8Array.from(window.atob(transactionBase64), (character) => character.charCodeAt(0));
     const transaction = Transaction.from(transactionBytes);
+    const connection = new Connection(rpcUrl, "confirmed");
+    const latestBlockhash = await connection.getLatestBlockhash();
 
-    if (provider.signAndSendTransaction) {
-      const result = await provider.signAndSendTransaction(transaction);
-      const signature = typeof result === "string" ? result : result.signature;
-
-      if (!signature) {
-        throw new Error("Transaction was sent but no signature was returned.");
-      }
-
-      return signature;
-    }
+    transaction.recentBlockhash = latestBlockhash.blockhash;
 
     if (!provider.signTransaction) {
+      if (provider.signAndSendTransaction) {
+        const result = await provider.signAndSendTransaction(transaction);
+        const signature = typeof result === "string" ? result : result.signature;
+
+        if (!signature) {
+          throw new Error("Transaction was sent but no signature was returned.");
+        }
+
+        return signature;
+      }
+
       throw new Error("This wallet does not support Solana transaction signing.");
     }
 
     const signedTransaction = (await provider.signTransaction(transaction)) as Transaction;
-    const connection = new Connection(rpcUrl, "confirmed");
     return connection.sendRawTransaction(signedTransaction.serialize(), {
       skipPreflight: false
     });

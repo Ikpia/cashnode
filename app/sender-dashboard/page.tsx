@@ -5,6 +5,7 @@ import { cancelPayoutRequest, listSenderPayoutRequests, type PayoutRequestRecord
 import { getWelcomeGreeting } from "@/lib/user-greeting";
 import { AppShell } from "@/components/app-shell";
 import { SenderPayoutForm } from "@/components/sender-payout-form";
+import { EscrowActionButton } from "@/components/escrow-action-button";
 import { Icon } from "@/components/ui/icon";
 
 function formatUsdt(value: number) {
@@ -184,6 +185,14 @@ export default async function SenderDashboardPage({
                                     Cancel
                                   </button>
                                 </form>
+                              ) : request.status === "open" && request.escrow?.status === "funded" ? (
+                                <EscrowActionButton
+                                  requestId={request.id}
+                                  action="cancel"
+                                  className="text-sm font-semibold text-stone-500"
+                                >
+                                  Cancel
+                                </EscrowActionButton>
                               ) : null}
                             </div>
                           </td>
