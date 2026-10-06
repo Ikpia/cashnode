@@ -918,7 +918,10 @@ async function findNearestEligibleAgent(input: {
     input.collection,
     activeAgents.map((agent) => agent.id)
   );
-  const livePresenceByAgentId = await listFreshOnlineAgentPresenceMap(activeAgents.map((agent) => agent.id));
+  const livePresenceByAgentId = await listFreshOnlineAgentPresenceMap(activeAgents.map((agent) => agent.id), {
+    latitude: input.pickupLatitude,
+    longitude: input.pickupLongitude
+  });
 
   const eligibleAgents = activeAgents
     .flatMap((agentUser) => {

@@ -8,6 +8,10 @@ type AgentPresenceDocument = {
   isOnline: boolean;
   latitude?: number;
   longitude?: number;
+  location?: {
+    type: "Point";
+    coordinates: [number, number];
+  };
   accuracyMeters?: number;
   source: "browser";
   createdAt: Date;
@@ -77,6 +81,60 @@ function normalizeAccuracy(value: unknown) {
   return Math.round(accuracy * 10) / 10;
 }
 
+function buildGeoPoint(input: { latitude: number; longitude: number }) {
+  return {
+    type: "Point" as const,
+    coordinates: [input.longitude, input.latitude] as [number, number]
+  };
+}
+
+async function backfillAgentPresenceLocations(collection: Collection<AgentPresenceDocument>) {
+  const legacyDocuments = await collection
+    .find({
+      location: { $exists: false },
+      latitude: { $exists: true },
+      longitude: { $exists: true }
+    })
+    .toArray();
+
+  for (const document of legacyDocuments) {
+    if (typeof document.latitude !== "number" || typeof document.longitude !== "number") {
+      continue;
+    }
+
+    await collection.updateOne(
+      { _id: document._id, location: { $exists: false } },
+      {
+        $set: {
+          location: buildGeoPoint({
+            latitude: document.latitude,
+            longitude: document.longitude
+          }),
+          updatedAt: document.updatedAt ?? new Date()
+        }
+      }
+    );
+  }
+}
+
+async function createAgentPresenceIndexesSafely(collection: Collection<AgentPresenceDocument>) {
+  try {
+    await collection.createIndexes([
+      { key: { userId: 1 }, name: "user_id_unique", unique: true },
+      { key: { isOnline: 1, lastSeenAt: -1 }, name: "online_last_seen_lookup" },
+      { key: { location: "2dsphere" }, name: "location_2dsphere" }
+    ]);
+  } catch (error) {
+    const mongoError = error as { code?: number; codeName?: string };
+
+    if (mongoError.code === 85 || mongoError.code === 86 || mongoError.codeName === "IndexOptionsConflict") {
+      return;
+    }
+
+    throw error;
+  }
+}
+
 function isPresenceStale(lastSeenAt: Date, isOnline: boolean) {
   return !isOnline || Date.now() - lastSeenAt.getTime() > AGENT_PRESENCE_STALE_MS;
 }
@@ -103,12 +161,10 @@ async function getAgentPresenceCollection(): Promise<Collection<AgentPresenceDoc
   const collection = db.collection<AgentPresenceDocument>(COLLECTION_NAME);
 
   if (!indexSetupPromise) {
-    indexSetupPromise = collection
-      .createIndexes([
-        { key: { userId: 1 }, name: "user_id_unique", unique: true },
-        { key: { isOnline: 1, lastSeenAt: -1 }, name: "online_last_seen_lookup" }
-      ])
-      .then(() => undefined);
+    indexSetupPromise = (async () => {
+      await backfillAgentPresenceLocations(collection);
+      await createAgentPresenceIndexesSafely(collection);
+    })();
   }
 
   await indexSetupPromise;
@@ -140,7 +196,13 @@ export async function getFreshOnlineAgentPresenceByUserId(userId: string) {
   return toAppAgentPresence(document);
 }
 
-export async function listFreshOnlineAgentPresenceMap(agentUserIds?: string[]) {
+export async function listFreshOnlineAgentPresenceMap(
+  agentUserIds?: string[],
+  near?: {
+    latitude: number;
+    longitude: number;
+  }
+) {
   const collection = await getAgentPresenceCollection();
   const cutoff = new Date(Date.now() - AGENT_PRESENCE_STALE_MS);
   const filter = {
@@ -150,6 +212,15 @@ export async function listFreshOnlineAgentPresenceMap(agentUserIds?: string[]) {
       ? {
           userId: {
             $in: agentUserIds.map((agentUserId) => ensureObjectId(agentUserId))
+          }
+        }
+      : {}),
+    ...(near
+      ? {
+          location: {
+            $near: {
+              $geometry: buildGeoPoint(near)
+            }
           }
         }
       : {})
@@ -187,6 +258,7 @@ export async function upsertAgentPresenceOnline(input: {
         isOnline: true,
         latitude,
         longitude,
+        location: buildGeoPoint({ latitude, longitude }),
         ...(accuracyMeters !== undefined ? { accuracyMeters } : {}),
         source: "browser",
         updatedAt: now,

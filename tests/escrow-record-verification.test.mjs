@@ -295,6 +295,26 @@ describe("escrow signature verification before status advancement", () => {
     assert.match(sameRequestDifferentAction.body.error, /already used|signature/i);
   });
 
+  it("rejects parallel replay of the same signature on two different requests with the unique index", async () => {
+    const reusedSignature = signature("race");
+    const firstRequestId = await seedRequest(payoutDocument({ id: "650000000000000000000021" }));
+    const secondRequestId = await seedRequest(payoutDocument({ id: "650000000000000000000022" }));
+    __queueTransactions([
+      transaction({ signer: SENDER_WALLET, action: "create" }),
+      transaction({ signer: SENDER_WALLET, action: "create" })
+    ]);
+
+    const [first, second] = await Promise.all([
+      postRecord({ requestId: firstRequestId, sig: reusedSignature }),
+      postRecord({ requestId: secondRequestId, sig: reusedSignature })
+    ]);
+    const successfulResponses = [first.response.status, second.response.status].filter((status) => status === 200);
+    const rejectedResponses = [first.response.status, second.response.status].filter((status) => status === 400);
+
+    assert.equal(successfulResponses.length, 1);
+    assert.equal(rejectedResponses.length, 1);
+  });
+
   it("keeps RPC errors retryable without marking the signature invalid or advancing status", async () => {
     const requestId = await seedRequest();
     __queueTransactions([new Error("RPC timeout")]);

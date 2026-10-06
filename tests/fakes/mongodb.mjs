@@ -58,7 +58,10 @@ function createDb() {
 }
 
 export function __resetMongo() {
-  db = createDb();
+  for (const collection of db.__collections.values()) {
+    collection.__documents.length = 0;
+  }
+  objectIdCounter = 0;
 }
 
 export async function getMongoDb() {
@@ -74,12 +77,19 @@ export async function getMongoClient() {
 function createCollection(name) {
   const documents = [];
   const uniqueIndexes = [];
+  const indexes = [];
 
   return {
     name,
     __documents: documents,
+    __indexes: indexes,
+    __lastFindFilter: null,
     async createIndexes(indexes) {
       for (const index of indexes) {
+        if (!this.__indexes.some((existingIndex) => existingIndex.name === index.name)) {
+          this.__indexes.push(index);
+        }
+
         if (index.unique) {
           uniqueIndexes.push(index);
         }
@@ -106,7 +116,9 @@ function createCollection(name) {
       return found ? cloneDocument(found) : null;
     },
     find(filter = {}) {
+      this.__lastFindFilter = cloneDocument(filter);
       let result = documents.filter((document) => matchesFilter(document, filter)).map(cloneDocument);
+      result = sortNearResults(result, filter);
 
       const cursor = {
         sort(sortSpec) {
@@ -139,7 +151,7 @@ function createCollection(name) {
         }
 
         const upserted = { _id: new ObjectId(), ...filter };
-        applyUpdate(upserted, update);
+        applyUpdate(upserted, update, { insert: true });
         enforceUniqueIndexes([...documents, upserted], uniqueIndexes);
         documents.push(upserted);
         return { matchedCount: 0, modifiedCount: 0, upsertedId: upserted._id };
@@ -210,9 +222,15 @@ function sortDocuments(documents, sortSpec = {}) {
   });
 }
 
-function applyUpdate(document, update) {
+function applyUpdate(document, update, options = {}) {
   for (const [path, value] of Object.entries(update.$set ?? {})) {
     setPath(document, path, cloneDocument(value));
+  }
+
+  if (options.insert) {
+    for (const [path, value] of Object.entries(update.$setOnInsert ?? {})) {
+      setPath(document, path, cloneDocument(value));
+    }
   }
 
   for (const path of Object.keys(update.$unset ?? {})) {
@@ -244,10 +262,54 @@ function matchesFilter(document, filter) {
       if ("$gte" in expected) {
         return actual >= expected.$gte;
       }
+
+      if ("$ne" in expected) {
+        return !valuesEqual(actual, expected.$ne);
+      }
+
+      if ("$near" in expected) {
+        return hasGeoPoint(actual);
+      }
     }
 
     return valuesEqual(actual, expected);
   });
+}
+
+function hasGeoPoint(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    value.type === "Point" &&
+    Array.isArray(value.coordinates) &&
+    value.coordinates.length === 2 &&
+    value.coordinates.every((coordinate) => typeof coordinate === "number")
+  );
+}
+
+function sortNearResults(documents, filter) {
+  const nearEntry = Object.entries(filter).find(([, value]) => value && typeof value === "object" && "$near" in value);
+
+  if (!nearEntry) {
+    return documents;
+  }
+
+  const [path, value] = nearEntry;
+  const targetCoordinates = value.$near?.$geometry?.coordinates;
+
+  if (!Array.isArray(targetCoordinates) || targetCoordinates.length !== 2) {
+    return documents;
+  }
+
+  return documents.slice().sort((left, right) => {
+    const leftPoint = getPath(left, path);
+    const rightPoint = getPath(right, path);
+    return coordinateDistance(leftPoint.coordinates, targetCoordinates) - coordinateDistance(rightPoint.coordinates, targetCoordinates);
+  });
+}
+
+function coordinateDistance(left, right) {
+  return Math.hypot(left[0] - right[0], left[1] - right[1]);
 }
 
 function valuesEqual(left, right) {
