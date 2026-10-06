@@ -1,4 +1,5 @@
-import { ObjectId, type Collection, type WithId } from "mongodb";
+import { MongoServerError, ObjectId, type Collection, type WithId } from "mongodb";
+import { Connection } from "@solana/web3.js";
 import { getFreshOnlineAgentPresenceByUserId, listFreshOnlineAgentPresenceMap } from "@/lib/agent-presence";
 import { createBitnobUsdtNgnQuote, executeBitnobUsdtNgnPayout } from "@/lib/bitnob";
 import { getMongoDb } from "@/lib/mongodb";
@@ -86,7 +87,25 @@ type EscrowDocument = {
   markPaidSignature?: string;
   completeSignature?: string;
   cancelSignature?: string;
+  pendingSignature?: {
+    action: "create" | "accept" | "mark_paid" | "complete" | "cancel";
+    signature: string;
+    walletAddress: string;
+    recordedAt: Date;
+    expiresAt: Date;
+    retryable: boolean;
+    message: string;
+  };
   failureReason?: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type EscrowSignatureRecordDocument = {
+  signature: string;
+  requestId: ObjectId;
+  action: "create" | "accept" | "mark_paid" | "complete" | "cancel";
+  status: "pending" | "confirmed";
   createdAt: Date;
   updatedAt: Date;
 };
@@ -303,8 +322,11 @@ export type NearestEligibleAgentPreview = {
 };
 
 const COLLECTION_NAME = "payout_requests";
+const ESCROW_SIGNATURE_RECORDS_COLLECTION_NAME = "escrow_signature_records";
 const LOCAL_EXCHANGE_RATE = 1550;
+const PENDING_ESCROW_SIGNATURE_TTL_MS = 1000 * 60 * 10;
 let indexSetupPromise: Promise<void> | null = null;
+let escrowSignatureIndexSetupPromise: Promise<void> | null = null;
 
 function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
@@ -812,6 +834,20 @@ async function getPayoutRequestsCollection(): Promise<Collection<PayoutRequestDo
   }
 
   await indexSetupPromise;
+  return collection;
+}
+
+async function getEscrowSignatureRecordsCollection(): Promise<Collection<EscrowSignatureRecordDocument>> {
+  const db = await getMongoDb();
+  const collection = db.collection<EscrowSignatureRecordDocument>(ESCROW_SIGNATURE_RECORDS_COLLECTION_NAME);
+
+  if (!escrowSignatureIndexSetupPromise) {
+    escrowSignatureIndexSetupPromise = collection
+      .createIndexes([{ key: { signature: 1 }, name: "signature_unique", unique: true }])
+      .then(() => undefined);
+  }
+
+  await escrowSignatureIndexSetupPromise;
   return collection;
 }
 
@@ -1902,10 +1938,324 @@ export async function initializePayoutEscrow(input: {
   return serializePayoutRequest(updatedDocument);
 }
 
+type EscrowAction = "create" | "accept" | "mark_paid" | "complete" | "cancel";
+
+class RetryableEscrowVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetryableEscrowVerificationError";
+  }
+}
+
+function isRetryableEscrowVerificationError(error: unknown): error is RetryableEscrowVerificationError {
+  return error instanceof RetryableEscrowVerificationError;
+}
+
+function toPublicKeyString(value: unknown) {
+  if (!value) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "object" && "toBase58" in value && typeof value.toBase58 === "function") {
+    return value.toBase58();
+  }
+
+  if (typeof value === "object" && "pubkey" in value) {
+    return toPublicKeyString((value as { pubkey?: unknown }).pubkey);
+  }
+
+  return String(value);
+}
+
+function getTransactionMessage(transaction: unknown) {
+  if (!transaction || typeof transaction !== "object") {
+    return null;
+  }
+
+  const transactionRecord = transaction as Record<string, unknown>;
+  const wrappedTransaction = transactionRecord.transaction as Record<string, unknown> | undefined;
+  return (wrappedTransaction?.message ?? transactionRecord.message ?? null) as Record<string, unknown> | null;
+}
+
+function getTransactionAccountKeys(transaction: unknown) {
+  const message = getTransactionMessage(transaction);
+
+  if (!message) {
+    return [];
+  }
+
+  const rawKeys =
+    (Array.isArray(message.accountKeys) && message.accountKeys) ||
+    (Array.isArray(message.staticAccountKeys) && message.staticAccountKeys) ||
+    [];
+
+  return rawKeys.map(toPublicKeyString).filter(Boolean);
+}
+
+function getTransactionInstructions(transaction: unknown) {
+  const message = getTransactionMessage(transaction);
+
+  if (!message) {
+    return [];
+  }
+
+  return (
+    (Array.isArray(message.instructions) && message.instructions) ||
+    (Array.isArray(message.compiledInstructions) && message.compiledInstructions) ||
+    []
+  ) as Record<string, unknown>[];
+}
+
+function getRequiredSignerKeys(transaction: unknown) {
+  if (transaction && typeof transaction === "object" && Array.isArray((transaction as { requiredSigners?: unknown[] }).requiredSigners)) {
+    return ((transaction as { requiredSigners: unknown[] }).requiredSigners).map(toPublicKeyString).filter(Boolean);
+  }
+
+  const message = getTransactionMessage(transaction);
+  const accountKeys = getTransactionAccountKeys(transaction);
+  const requiredSignatureCount =
+    message?.header && typeof message.header === "object" && typeof (message.header as { numRequiredSignatures?: unknown }).numRequiredSignatures === "number"
+      ? (message.header as { numRequiredSignatures: number }).numRequiredSignatures
+      : 0;
+
+  return accountKeys.slice(0, requiredSignatureCount);
+}
+
+function instructionProgramId(instruction: Record<string, unknown>, accountKeys: string[]) {
+  if (instruction.programId) {
+    return toPublicKeyString(instruction.programId);
+  }
+
+  if (typeof instruction.programIdIndex === "number") {
+    return accountKeys[instruction.programIdIndex] ?? "";
+  }
+
+  return "";
+}
+
+function instructionAccounts(instruction: Record<string, unknown>, accountKeys: string[]) {
+  if (Array.isArray(instruction.accounts)) {
+    return instruction.accounts.map((account) => (typeof account === "number" ? accountKeys[account] : toPublicKeyString(account))).filter(Boolean);
+  }
+
+  return [];
+}
+
+function instructionMatchesAction(instruction: Record<string, unknown>, action: EscrowAction) {
+  const actionHint =
+    typeof instruction.action === "string"
+      ? instruction.action
+      : typeof instruction.type === "string"
+        ? instruction.type
+        : typeof instruction.name === "string"
+          ? instruction.name
+          : "";
+
+  if (!actionHint) {
+    return true;
+  }
+
+  return actionHint === action;
+}
+
+function getExpectedEscrowSigner(input: {
+  action: EscrowAction;
+  walletAddress: string;
+  actorUser: AppUser;
+  escrow: EscrowDocument;
+}) {
+  if (input.action === "accept") {
+    return input.actorUser.walletAddress || input.walletAddress;
+  }
+
+  if (input.action === "mark_paid") {
+    return input.escrow.agentWallet || input.actorUser.walletAddress || input.walletAddress;
+  }
+
+  return input.escrow.senderWallet || input.walletAddress;
+}
+
+function getEscrowVerificationRpcUrl() {
+  const explicitRpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL;
+
+  if (explicitRpcUrl?.trim()) {
+    return explicitRpcUrl.trim();
+  }
+
+  const cluster = process.env.NEXT_PUBLIC_SOLANA_CLUSTER || process.env.CASHNODE_SOLANA_CLUSTER || "devnet";
+
+  switch (cluster) {
+    case "localnet":
+      return "http://127.0.0.1:8899";
+    case "mainnet-beta":
+      return "https://api.mainnet-beta.solana.com";
+    case "testnet":
+      return "https://api.testnet.solana.com";
+    default:
+      return "https://api.devnet.solana.com";
+  }
+}
+
+async function verifyEscrowTransactionOnChain(input: {
+  action: EscrowAction;
+  signature: string;
+  expectedSigner: string;
+  expectedEscrowAddress: string;
+  expectedProgramId: string;
+}) {
+  const connection = new Connection(getEscrowVerificationRpcUrl(), input.action === "complete" ? "finalized" : "confirmed");
+  let transaction: unknown;
+
+  try {
+    transaction = await connection.getTransaction(input.signature, {
+      commitment: input.action === "complete" ? "finalized" : "confirmed",
+      maxSupportedTransactionVersion: 0
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Solana RPC failed while verifying the transaction.";
+    throw new RetryableEscrowVerificationError(`Solana transaction verification is retryable: ${message}`);
+  }
+
+  if (!transaction) {
+    throw new RetryableEscrowVerificationError("Solana transaction is not confirmed yet. Retry shortly.");
+  }
+
+  const transactionRecord = transaction as { meta?: { err?: unknown } | null };
+
+  if (transactionRecord.meta?.err) {
+    throw new Error("Solana transaction failed on chain and cannot be recorded.");
+  }
+
+  const accountKeys = getTransactionAccountKeys(transaction);
+  const requiredSigners = getRequiredSignerKeys(transaction);
+  const instructions = getTransactionInstructions(transaction);
+  const matchingProgramInstruction = instructions.find((instruction) => instructionProgramId(instruction, accountKeys) === input.expectedProgramId);
+
+  if (!requiredSigners.includes(input.expectedSigner)) {
+    throw new Error("Solana transaction signer does not match the expected wallet for this escrow action.");
+  }
+
+  if (!accountKeys.includes(input.expectedEscrowAddress)) {
+    throw new Error("Solana transaction does not include the expected escrow account.");
+  }
+
+  if (!matchingProgramInstruction) {
+    throw new Error("Solana transaction does not include the expected CashNode escrow program.");
+  }
+
+  const instructionAccountKeys = instructionAccounts(matchingProgramInstruction, accountKeys);
+
+  if (instructionAccountKeys.length > 0 && !instructionAccountKeys.includes(input.expectedEscrowAddress)) {
+    throw new Error("Solana escrow instruction does not reference the expected escrow account.");
+  }
+
+  if (!instructionMatchesAction(matchingProgramInstruction, input.action)) {
+    throw new Error("Solana escrow instruction does not match the requested action.");
+  }
+}
+
+async function reserveEscrowSignature(input: {
+  requestId: ObjectId;
+  action: EscrowAction;
+  signature: string;
+  status: "pending" | "confirmed";
+}) {
+  const collection = await getEscrowSignatureRecordsCollection();
+  const existingRecord = await collection.findOne({ signature: input.signature });
+  const now = new Date();
+
+  if (existingRecord) {
+    const sameRequest = existingRecord.requestId.toHexString() === input.requestId.toHexString();
+
+    if (!sameRequest || existingRecord.action !== input.action) {
+      throw new Error("This escrow transaction signature has already been used for another request or action.");
+    }
+
+    await collection.updateOne(
+      { _id: (existingRecord as WithId<EscrowSignatureRecordDocument>)._id },
+      {
+        $set: {
+          status: input.status,
+          updatedAt: now
+        }
+      }
+    );
+
+    return;
+  }
+
+  try {
+    await collection.insertOne({
+      requestId: input.requestId,
+      action: input.action,
+      signature: input.signature,
+      status: input.status,
+      createdAt: now,
+      updatedAt: now
+    });
+  } catch (error) {
+    if (error instanceof MongoServerError && error.code === 11000) {
+      throw new Error("This escrow transaction signature has already been used.");
+    }
+
+    throw error;
+  }
+}
+
+async function storePendingEscrowSignature(input: {
+  collection: Collection<PayoutRequestDocument>;
+  requestId: ObjectId;
+  action: EscrowAction;
+  signature: string;
+  walletAddress: string;
+  message: string;
+}) {
+  const now = new Date();
+
+  await reserveEscrowSignature({
+    requestId: input.requestId,
+    action: input.action,
+    signature: input.signature,
+    status: "pending"
+  });
+
+  await input.collection.updateOne(
+    { _id: input.requestId },
+    {
+      $set: {
+        "escrow.pendingSignature": {
+          action: input.action,
+          signature: input.signature,
+          walletAddress: input.walletAddress,
+          recordedAt: now,
+          expiresAt: new Date(now.getTime() + PENDING_ESCROW_SIGNATURE_TTL_MS),
+          retryable: true,
+          message: input.message
+        },
+        "escrow.updatedAt": now,
+        "escrow.failureReason": null,
+        updatedAt: now
+      }
+    }
+  );
+
+  const updatedDocument = await input.collection.findOne({ _id: input.requestId });
+
+  if (!updatedDocument) {
+    throw new Error("Failed to store pending escrow signature.");
+  }
+
+  return serializePayoutRequest(updatedDocument);
+}
+
 export async function recordPayoutEscrowSignature(input: {
   requestId: string;
   actorUser: AppUser;
-  action: "create" | "accept" | "mark_paid" | "complete" | "cancel";
+  action: EscrowAction;
   signature: string;
   walletAddress: string;
   escrowAddress?: string;
@@ -1978,11 +2328,80 @@ export async function recordPayoutEscrowSignature(input: {
     return serializePayoutRequest(document);
   }
 
+  if (
+    currentEscrow.pendingSignature?.signature === input.signature &&
+    currentEscrow.pendingSignature.expiresAt &&
+    currentEscrow.pendingSignature.expiresAt.getTime() <= Date.now()
+  ) {
+    await collection.updateOne(
+      { _id },
+      {
+        $set: {
+          "escrow.failureReason": "Pending escrow signature expired before confirmation.",
+          updatedAt: now,
+          "escrow.updatedAt": now
+        },
+        $unset: {
+          "escrow.pendingSignature": ""
+        }
+      }
+    );
+    throw new Error("Pending escrow signature expired before confirmation. Send a new transaction and try again.");
+  }
+
   const validFromStates = VALID_ESCROW_TRANSITIONS[input.action];
 
   if (!validFromStates.includes(currentEscrow.status)) {
     throw new Error(`Cannot perform '${input.action}' when escrow is '${currentEscrow.status}'.`);
   }
+
+  const expectedSigner = getExpectedEscrowSigner({
+    action: input.action,
+    walletAddress: input.walletAddress,
+    actorUser: input.actorUser,
+    escrow: currentEscrow
+  });
+
+  if (input.walletAddress !== expectedSigner) {
+    throw new Error("Wallet address does not match the expected signer for this escrow action.");
+  }
+
+  try {
+    await verifyEscrowTransactionOnChain({
+      action: input.action,
+      signature: input.signature,
+      expectedSigner,
+      expectedEscrowAddress: currentEscrow.escrowAddress,
+      expectedProgramId: currentEscrow.programId
+    });
+  } catch (error) {
+    if (isRetryableEscrowVerificationError(error)) {
+      const request = await storePendingEscrowSignature({
+        collection,
+        requestId: _id,
+        action: input.action,
+        signature: input.signature,
+        walletAddress: input.walletAddress,
+        message: error.message
+      });
+
+      return {
+        request,
+        retryable: true,
+        pending: true,
+        message: error.message
+      };
+    }
+
+    throw error;
+  }
+
+  await reserveEscrowSignature({
+    requestId: _id,
+    action: input.action,
+    signature: input.signature,
+    status: "confirmed"
+  });
 
   if (input.escrowAddress) {
     setPayload["escrow.escrowAddress"] = input.escrowAddress;
@@ -1997,9 +2416,17 @@ export async function recordPayoutEscrowSignature(input: {
     setPayload.cancelledAt = now;
   }
 
-  const updateResult = await collection.updateOne({ _id }, { $set: setPayload });
+  const updateResult = await collection.updateOne(
+    { _id, "escrow.status": currentEscrow.status },
+    {
+      $set: setPayload,
+      $unset: {
+        "escrow.pendingSignature": ""
+      }
+    }
+  );
 
-  if (updateResult.matchedCount !== 1) {
+  if (updateResult.modifiedCount !== 1) {
     throw new Error("Failed to record escrow signature.");
   }
 

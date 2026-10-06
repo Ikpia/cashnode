@@ -112,6 +112,18 @@ export async function POST(request: Request, context: { params: Promise<{ reques
       referenceSeed
     });
 
+    if ("retryable" in payoutRequest && payoutRequest.retryable) {
+      return NextResponse.json(
+        {
+          retryable: true,
+          pending: true,
+          message: payoutRequest.message,
+          request: payoutRequest.request
+        },
+        { status: 202 }
+      );
+    }
+
     return NextResponse.json({ request: payoutRequest });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to record escrow transaction.";

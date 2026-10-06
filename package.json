@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test": "node --import ./tests/register-loader.mjs --test --test-isolation=none \"tests/*.test.mjs\"",
     "start": "next start",
     "anchor:build": "anchor build",
     "anchor:deploy:localnet": "anchor deploy --provider.cluster localnet",
