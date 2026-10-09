@@ -43,6 +43,20 @@ const TEJUOSHO = {
   latitude: 6.50885,
   longitude: 3.36968
 };
+const TBS = {
+  id: "lagos-tbs-onikan",
+  area: "Tafawa Balewa Square, Onikan",
+  address: "21 Tafawa Balewa Road, Onikan, Lagos Island, Lagos",
+  latitude: 6.44659,
+  longitude: 3.40185
+};
+const CIRCLE_MALL = {
+  id: "lagos-circle-mall",
+  area: "Circle Mall, Osapa Lekki",
+  address: "Lekki-Epe Expressway, Osapa, Lekki, Lagos",
+  latitude: 6.4544967,
+  longitude: 3.5052199
+};
 
 let mongoServer;
 let testCounter = 0;
@@ -259,6 +273,8 @@ after(async () => {
 beforeEach(async () => {
   testCounter += 1;
   __resetSolanaMock();
+  delete process.env.CASHNODE_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS;
+  delete process.env.CASHNODE_AGENT_PRESENCE_GEO_RESULT_LIMIT;
   adapter = await import(`./real-mongodb-adapter.mjs?real-mongo=${testCounter}`);
   adapter.__setRealMongoConnection({
     uri: mongoServer.getUri(),
@@ -268,6 +284,7 @@ beforeEach(async () => {
 
 describe("real MongoDB safeguards", () => {
   it("uses real 2dsphere $near ordering while filtering excluded, over-capacity, and stale agents", async () => {
+    process.env.CASHNODE_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS = "700000";
     const { payoutRequests } = await loadRealModules(testCounter);
     const db = await adapter.getMongoDb();
     const badAssignedId = "64f000000000000000001201";
@@ -345,6 +362,57 @@ describe("real MongoDB safeguards", () => {
     });
 
     assert.equal(preview.nearestAgent.name, "Lagos Hub Fallback");
+  });
+
+  it("does not return fresh live presence beyond the configured geo max distance", async () => {
+    process.env.CASHNODE_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS = "30000";
+    const { agentPresence } = await loadRealModules(testCounter);
+    const db = await adapter.getMongoDb();
+    const ikejaAgentId = "64f000000000000000001213";
+    const beninAgentId = "64f000000000000000001214";
+
+    await db.collection("agent_presence").insertMany([
+      presenceDocument({ userId: ikejaAgentId, location: IKEJA }),
+      presenceDocument({ userId: beninAgentId, location: BENIN })
+    ]);
+
+    const presenceMap = await agentPresence.listFreshOnlineAgentPresenceMap([ikejaAgentId, beninAgentId], {
+      latitude: IKEJA.latitude,
+      longitude: IKEJA.longitude
+    });
+
+    assert.equal(agentPresence.AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS, 30000);
+    assert.equal(presenceMap.has(ikejaAgentId), true);
+    assert.equal(presenceMap.has(beninAgentId), false);
+  });
+
+  it("caps fresh live presence geo results at the configured limit", async () => {
+    process.env.CASHNODE_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS = "50000";
+    process.env.CASHNODE_AGENT_PRESENCE_GEO_RESULT_LIMIT = "2";
+    const { agentPresence } = await loadRealModules(testCounter);
+    const db = await adapter.getMongoDb();
+    const agentIds = [
+      "64f000000000000000001215",
+      "64f000000000000000001216",
+      "64f000000000000000001217",
+      "64f000000000000000001218"
+    ];
+
+    await db.collection("agent_presence").insertMany([
+      presenceDocument({ userId: agentIds[0], location: IKEJA }),
+      presenceDocument({ userId: agentIds[1], location: TEJUOSHO }),
+      presenceDocument({ userId: agentIds[2], location: TBS }),
+      presenceDocument({ userId: agentIds[3], location: CIRCLE_MALL })
+    ]);
+
+    const presenceMap = await agentPresence.listFreshOnlineAgentPresenceMap(agentIds, {
+      latitude: IKEJA.latitude,
+      longitude: IKEJA.longitude
+    });
+
+    assert.equal(agentPresence.AGENT_PRESENCE_GEO_RESULT_LIMIT, 2);
+    assert.equal(presenceMap.size, 2);
+    assert.deepEqual(Array.from(presenceMap.keys()), [agentIds[0], agentIds[1]]);
   });
 
   it("backfills only valid legacy coordinates before creating the 2dsphere index", async () => {

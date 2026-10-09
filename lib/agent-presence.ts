@@ -2,6 +2,27 @@ import { ObjectId, type Collection, type WithId } from "mongodb";
 import { getMongoDb } from "@/lib/mongodb";
 
 export const AGENT_PRESENCE_STALE_MS = 1000 * 180;
+const DEFAULT_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS = 50_000;
+const DEFAULT_AGENT_PRESENCE_GEO_RESULT_LIMIT = 50;
+
+function readPositiveIntegerEnv(name: string, fallback: number) {
+  const parsedValue = Number(process.env[name]);
+
+  if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+    return fallback;
+  }
+
+  return parsedValue;
+}
+
+export const AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS = readPositiveIntegerEnv(
+  "CASHNODE_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS",
+  DEFAULT_AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS
+);
+export const AGENT_PRESENCE_GEO_RESULT_LIMIT = readPositiveIntegerEnv(
+  "CASHNODE_AGENT_PRESENCE_GEO_RESULT_LIMIT",
+  DEFAULT_AGENT_PRESENCE_GEO_RESULT_LIMIT
+);
 
 type AgentPresenceDocument = {
   userId: ObjectId;
@@ -232,13 +253,20 @@ export async function listFreshOnlineAgentPresenceMap(
       ? {
           location: {
             $near: {
-              $geometry: buildGeoPoint(near)
+              $geometry: buildGeoPoint(near),
+              $maxDistance: AGENT_PRESENCE_GEO_MAX_DISTANCE_METERS
             }
           }
         }
       : {})
   };
-  const documents = await collection.find(filter).toArray();
+  const cursor = collection.find(filter);
+
+  if (near) {
+    cursor.limit(AGENT_PRESENCE_GEO_RESULT_LIMIT);
+  }
+
+  const documents = await cursor.toArray();
 
   return documents.reduce<Map<string, AppAgentPresence>>((presenceMap, document) => {
     if (typeof document.latitude === "number" && typeof document.longitude === "number") {
