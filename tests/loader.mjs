@@ -15,6 +15,45 @@ const aliases = new Map([
 ]);
 
 export async function resolve(specifier, context, nextResolve) {
+  const realMongoMode = context.parentURL?.includes("?real-mongo") ?? false;
+  const realMongoSearch = realMongoMode ? new URL(context.parentURL).search : "?real-mongo";
+
+  if (specifier === "mongodb-real") {
+    return nextResolve("mongodb", context);
+  }
+
+  if (specifier === "mongodb-memory-server") {
+    return nextResolve(specifier, context);
+  }
+
+  if (realMongoMode && specifier === "mongodb") {
+    return nextResolve(specifier, context);
+  }
+
+  if (realMongoMode && specifier === "@/lib/mongodb") {
+    return {
+      shortCircuit: true,
+      url: `${root}tests/real-mongodb-adapter.mjs${realMongoSearch}`
+    };
+  }
+
+  if (realMongoMode && specifier.startsWith("@/") && !aliases.has(specifier)) {
+    const relativePath = specifier.slice(2);
+    const candidates = [
+      `${relativePath}.ts`,
+      `${relativePath}.tsx`,
+      `${relativePath}.mjs`,
+      `${relativePath}.js`,
+      relativePath
+    ];
+    const resolvedPath = candidates.find((candidate) => existsSync(path.join(process.cwd(), candidate))) ?? relativePath;
+
+    return {
+      shortCircuit: true,
+      url: `${root}${resolvedPath.replaceAll("\\", "/")}${realMongoSearch}`
+    };
+  }
+
   if (aliases.has(specifier)) {
     return {
       shortCircuit: true,

@@ -262,6 +262,50 @@ describe("escrow signature verification before status advancement", () => {
     }
   });
 
+  it("rejects invalid escrow transitions before on-chain verification", async () => {
+    const requestId = await seedRequest(
+      payoutDocument({
+        escrowStatus: "funded"
+      })
+    );
+    __setCurrentSessionUser(actorUser(AGENT_ID));
+
+    const { response, body } = await postRecord({
+      requestId,
+      action: "mark_paid",
+      sig: signature("badTransition"),
+      walletAddress: AGENT_WALLET
+    });
+    const stored = await loadRequest(requestId);
+
+    assert.equal(response.status, 400);
+    assert.match(body.error, /Cannot perform 'mark_paid' when escrow is 'funded'/);
+    assert.equal(stored.escrow.status, "funded");
+    assert.equal(__getTransactionCalls().length, 0);
+  });
+
+  it("rejects escrow actions from the wrong role before on-chain verification", async () => {
+    const requestId = await seedRequest(
+      payoutDocument({
+        escrowStatus: "funded"
+      })
+    );
+    __setCurrentSessionUser(actorUser(SENDER_ID));
+
+    const { response, body } = await postRecord({
+      requestId,
+      action: "accept",
+      sig: signature("wrongRaxe"),
+      walletAddress: SENDER_WALLET
+    });
+    const stored = await loadRequest(requestId);
+
+    assert.equal(response.status, 400);
+    assert.match(body.error, /assigned agent/i);
+    assert.equal(stored.escrow.status, "funded");
+    assert.equal(__getTransactionCalls().length, 0);
+  });
+
   it("rejects replaying the same signature on a different request or action", async () => {
     const reusedSignature = signature("reuse");
     const firstRequestId = await seedRequest(payoutDocument({ id: "650000000000000000000011" }));

@@ -88,6 +88,19 @@ function buildGeoPoint(input: { latitude: number; longitude: number }) {
   };
 }
 
+function hasValidCoordinates(input: { latitude?: unknown; longitude?: unknown }) {
+  return (
+    typeof input.latitude === "number" &&
+    Number.isFinite(input.latitude) &&
+    input.latitude >= -90 &&
+    input.latitude <= 90 &&
+    typeof input.longitude === "number" &&
+    Number.isFinite(input.longitude) &&
+    input.longitude >= -180 &&
+    input.longitude <= 180
+  );
+}
+
 async function backfillAgentPresenceLocations(collection: Collection<AgentPresenceDocument>) {
   const legacyDocuments = await collection
     .find({
@@ -98,7 +111,7 @@ async function backfillAgentPresenceLocations(collection: Collection<AgentPresen
     .toArray();
 
   for (const document of legacyDocuments) {
-    if (typeof document.latitude !== "number" || typeof document.longitude !== "number") {
+    if (!hasValidCoordinates(document)) {
       continue;
     }
 
