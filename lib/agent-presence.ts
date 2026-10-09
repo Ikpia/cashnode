@@ -109,7 +109,10 @@ function buildGeoPoint(input: { latitude: number; longitude: number }) {
   };
 }
 
-function hasValidCoordinates(input: { latitude?: unknown; longitude?: unknown }) {
+function hasValidCoordinates(input: { latitude?: unknown; longitude?: unknown }): input is {
+  latitude: number;
+  longitude: number;
+} {
   return (
     typeof input.latitude === "number" &&
     Number.isFinite(input.latitude) &&
